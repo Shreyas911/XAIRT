@@ -1,14 +1,14 @@
-name: py38_LRP
+name: py310_LRP
 channels:
   - conda-forge
   - defaults
 dependencies:
-    - python=3.8
+    - python=3.10
 # Basics
     - numpy
     - scipy
     - future
-    - pip=20.0
+    - pip
 # LRP
     - pip:
       - innvestigate
@@ -18,7 +18,7 @@ dependencies:
     - bottleneck
     - dask
     - cftime
-    - nc-time-axis>=1.2.0
+    - nc-time-axis
     - xmitgcm
     - xgcm
     - ecco_v4_py
@@ -34,7 +34,7 @@ dependencies:
     - pytest-cov 
     - codecov
     - black
-    - docrep<=0.2.7
+    - docrep
     - aiohttp
 # jupyter etc
     - jupyter
@@ -56,11 +56,11 @@ dependencies:
 # Specify blas to use mkl
     - mkl
     - libblas=*=*mkl
-# tf and tf.keras
-    - cudatoolkit=10.1
-    - cudnn=7.6
-    - nccl=2.4
-    - tensorflow-gpu=2.2
 # scikit-learn
     - scikit-learn
+# tf and tf.keras
+    - cudatoolkit
+    - cudnn
+    - nccl
+    - tensorflow-gpu
 
