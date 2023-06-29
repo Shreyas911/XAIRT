@@ -7,12 +7,11 @@ warnings.simplefilter("ignore")
 import tensorflow.keras as keras
 
 # Get useful types from types.py
-import types
-import typing
+from XAIRT.backend.types import kModel
 
 __all__ =["getLayerIndexByName"]
 
-def getLayerIndexByName(model, layername: str) -> int:
+def getLayerIndexByName(model: kModel, layername: str) -> int:
 	for idx, layer in enumerate(model.layers):
 		if layer.name == layername: 
 			return idx
