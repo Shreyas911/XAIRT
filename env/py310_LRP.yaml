@@ -2,6 +2,7 @@ name: py310_LRP
 channels:
   - conda-forge
   - defaults
+  - main
 dependencies:
     - python=3.10
 # Basics
@@ -62,5 +63,5 @@ dependencies:
     - cudatoolkit
     - cudnn
     - nccl
-    - tensorflow-gpu
-
+    - tensorflow==2.9.1=gpu_py310*
+    - tensorflow_addons
