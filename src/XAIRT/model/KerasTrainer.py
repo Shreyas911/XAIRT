@@ -1,7 +1,6 @@
-from abc import ABC, ABCMeta, abstractmethod
-from XAIRT.backend.types import OptionalList, OptionalSequence
-from XAIRT.backend.types import VectorNumpy, MatrixNumpy, TensorNumpy
-from XAIRT.backend.types import Dataset, Tensor
+from abc import ABCMeta, abstractmethod
+from XAIRT.backend.types import OptionalList, TensorNumpy
+from XAIRT.backend.types import Dataset, LayerDict, LossDict
 
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -11,48 +10,53 @@ from tensorflow.keras.layers import Dense, Dropout, Input
 from tensorflow.keras.callbacks import ModelCheckpoint
 from sklearn.utils import shuffle
 
+import os
+
 __all__ = ["KerasTrainer", "TrainFullyConnected"]
 
 class KerasTrainer(metaclass=ABCMeta):
 
 	@abstractmethod
-	def __init__(self):
+	def __init__(self) -> None:
 		pass
 
 	@abstractmethod
-	def createModel(self):
+	def _createModel(self) -> None:
 		pass
 
 	@abstractmethod
-	def compileModel(self):
+	def _compileModel(self) -> None:
 		pass
 
 	@abstractmethod
-	def checkpoint(self):
+	def _createCheckpoint(self) -> None:
 		pass
 
 	@abstractmethod
-	def trainModel(self):
+	def _trainModel(self) -> None:
 		pass
 
 	@abstractmethod
-	def loadBestModel(self):
+	def loadBestModel(self) -> Model:
+		pass
+
+	@abstractmethod
+	def quickTrain(self) -> Model:
 		pass
 
 class TrainFullyConnected(KerasTrainer):
 
 	def __init__(self, 
 		     x: TensorNumpy | Dataset, y: TensorNumpy | Dataset, 
-		     layers: list[list[int]], 
-	             activation_layers: list[list[str]],
-                     loss: OptionalList[str], 
-		     optim: OptionalList[str], 
-                     metrics: OptionalList[str],
+		     layers: list[LayerDict],
+                     losses: OptionalList[LossDict], 
+		     optim: str, 
+                     metrics: list[str],
                      batch_size: int, 
                      epochs: int, 
                      validation_split: float,
                      filename: str,
-		     dirname: str):
+		     dirname: str) -> None:
 
 		super().__init__()
 
@@ -60,9 +64,8 @@ class TrainFullyConnected(KerasTrainer):
 		self.y = y
 		
 		self.layers = layers
-		self.activation_layers = activation_layers
 		
-		self.loss = loss
+		self.losses = losses
 		self.optim = optim
 		self.metrics = metrics
 		
@@ -73,26 +76,51 @@ class TrainFullyConnected(KerasTrainer):
 		self.dirname = dirname
 		self.filename = filename	
 
-	def createModel(self):
+		self._model_state = []
+
+	def _createModel(self) -> None:
 
 		keras.backend.clear_session()
-		
-		inputs = Input(shape=(self.layers[0],))
-		
-		dense = Dense(self.layers[1], activation=self.activation_layers[0])		
+
+		_sizes = [layer['size'] for layer in self.layers]
+		_activations = [layer['activation'] for layer in self.layers]
+		_use_biases = [layer['use_bias'] if 'use_bias' in layer else None for layer in self.layers]
+
+		if _activations[0] is not None:
+			raise ValueError("Input layer cannot have an activation")
+		if _use_biases[0] is not None:
+			raise ValueError("Input layer cannot have a bias.")
+
+		inputs = Input(shape=(_sizes[0],))
+		dense = Dense(_sizes[1], activation=_activations[1], use_bias = _use_biases[1])
 		x = dense(inputs)
-		for i in range(2, len(self.layers)):
+ 
+		for i in range(2, len(_sizes)):
 		
-			dense = Dense(self.layers[i], activation=self.activation_layers[i-1])
-			x = dense(x) 
+			dense = Dense(_sizes[i], activation=_activations[i], use_bias = _use_biases[i])
+			x = dense(x)
 		
 		self.model = Model(inputs=inputs, outputs=x)
 
-	def compileModel(self):
+		self._model_state.append('created')
 
-		self.model.compile(loss=self.loss, optimizer=self.optim, metrics=self.metrics)
+	def _compileModel(self) -> None:
 
-	def checkpoint(self):
+		if len(self.losses) != 1:
+			raise NotImplementedError("Weighted losses not implemented yet.")
+		elif len(self.losses) == 1 and self.losses[0]['weight'] != 1.0:
+			raise ValueError("Loss weight has to be 1.0 for a single loss function.")
+		else: 
+			pass
+
+		_loss_kinds = [loss['kind'] for loss in self.losses]
+		_loss_weights = [loss['weight'] for loss in self.losses]
+
+		self.model.compile(loss=_loss_kinds[0], optimizer=self.optim, metrics=self.metrics)
+
+		self._model_state.append('compiled')
+
+	def _createCheckpoint(self) -> None:
 
 		self.mod_h5 = os.path.join(self.dirname,
 		                           self.filename + '.h5')
@@ -103,20 +131,37 @@ class TrainFullyConnected(KerasTrainer):
 		
 		self.callbacks = [self.checkpoint]
 		
+		self._model_state.append('checkpointed')
 
-	def trainModel(self):
-		self.fit = self.model.fit(self.x, self.y,
+	def _trainModel(self) -> None:
+
+		self._fit = self.model.fit(self.x, self.y,
             			batch_size=self.batch_size,
             			epochs=self.epochs, 
             			shuffle=True,
             			validation_split = self.validation_split, 
             			callbacks=self.callbacks) 
 
-	def loadBestModel(self):
-		self.best_model = keras.models.load_model(self.mod_h5)
+		self._model_state.append('trained')
 
-	def testOnePoint(self):
+	def loadBestModel(self) -> Model:
 
-		pass
+		if self._model_state[-1] != 'trained':
+			raise Exception("Model is not trained!")
+
+		best_model = keras.models.load_model(self.mod_h5)
+	
+		return best_model
+
+	def quickTrain(self) -> Model:
+
+		self._model_state = []
+
+		self._createModel()
+		self._compileModel()
+		self._createCheckpoint()
+		self._trainModel()
+
+		return self.loadBestModel()
 
 
