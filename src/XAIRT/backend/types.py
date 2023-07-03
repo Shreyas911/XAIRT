@@ -38,13 +38,39 @@ class LossDict(TypedDict):
 	kind  : list['str']
 	weight: list['float']
 
-class AnalysisNormalizeDict:
+class AnalysisNormalizeDict(TypedDict):
 	""" Custom typing hint for information about normalizing XAI analysis """
 
 	bool_: bool
 	kind : NotRequired[str]
 
-class AnalysisStatsDict:
+class ModelMetadata(TypedDict):
+	""" Custom typing hint for model metadata """
+
+	layers : list[LayerDict]
+	losses : OptionalList[LossDict]
+	optim  : str
+	metrics: list[str]
+
+class TrainMetadata(TypedDict):
+	""" Custom typing hint for training metadata """
+
+	batch_size       : int
+	epochs           : int
+	validation_split : float
+	filename         : str
+	dirname          : str
+
+class AnalysisStatsDict(TypedDict):
 	""" Custom typing hint for statistics of analysis of many samples """ 
 
 	mean: NotRequired[TensorNumpy]
+
+class LetzgusDict(TypedDict):
+	""" Custom typing hint for passing Letzgus information around """
+
+	y_ref             : float
+	sampleLetzgus     : TensorNumpy
+	step_width        : float
+	max_it            : int
+	method_reg        : str

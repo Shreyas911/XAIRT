@@ -3,14 +3,20 @@ from abc import ABCMeta, abstractmethod
 from XAIRT.backend.types import Optional, OptionalList
 from XAIRT.backend.types import TensorNumpy
 from XAIRT.backend.types import AnalysisNormalizeDict, AnalysisStatsDict
+from XAIRT.backend.types import ModelMetadata, TrainMetadata
+
+from XAIRT.backend.graph import getLayerIndexByName 
 
 from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense
 
 import innvestigate
 import innvestigate.utils as iutils
 from innvestigate.analyzer.base import AnalyzerBase
 
 import numpy as np
+
+import warnings
 
 __all__ = ["XAI", "XAIR"]
 
@@ -44,94 +50,209 @@ class XAI(metaclass=ABCMeta):
 class XAIR(XAI):
 
 	def __init__(self, 
-		     model: Model,
+		     model: OptionalList[Model],
 		     method: Optional[str] = None,
+		     kind: Optional[str] = None,
 		     samples: Optional[TensorNumpy] = None,
 		     normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'},
-		     y_ref: Optional[float] = 0.0
+		     #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
+		     **kwargs: int
 		    ) -> None:
 
 		super().__init__()
 		self.model = model
 		self.method = method
+		self.kind = kind
 		self.samples = samples
 		self.normalize = normalize
-		self.y_ref = y_ref
+		self.y_ref = kwargs['y_ref'] if kwargs.__contains__('y_ref') else 0.0
+		self.kwargs = kwargs
+		self.models_letzgus = []
 
-	def _create_analyzer(self, method: str) -> AnalyzerBase:
+	def _create_analyzer(self, 
+                             method: str, 
+                             kind: str,
+			     sample: Optional[TensorNumpy],
+			     #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12 
+		             **kwargs: int) -> OptionalList[AnalyzerBase]:
 		
-		Analyze = innvestigate.create_analyzer(method, self.model) 
+		if kind == 'classic':
+
+			Analyze = innvestigate.create_analyzer(method, self.model)
+
+		elif kind == 'letzgus':
+
+			if bool(kwargs) is False:
+
+				raise ValueError("No Letzgus hyperparameters given!")
+
+			if sample is None:
+
+				raise ValueError("No sample to create letzgus analyzer!")			
+
+			models_letzgus = self.createLetzgus(sample, **kwargs)
+
+			Analyze = [innvestigate.create_analyzer(method, models_letzgus[0]),
+				   innvestigate.create_analyzer(method, models_letzgus[1]),
+				   innvestigate.create_analyzer(method, models_letzgus[2])]
+
+		else:
+
+			raise NotImplementedError("The only kinds of analyzers available are classic and letzgus!")
+
 		return Analyze
 
 	def _analyze_sample(self,
-			    method: str, 
-			    sample: TensorNumpy,
+			    method: str,
+			    kind: str,
+			    sample: Optional[TensorNumpy],
 			    normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'},
-			    Analyze: Optional[AnalyzerBase] = None
+			    Analyze: OptionalList[AnalyzerBase] = None,
+			    #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
+			    **kwargs: int
 			  ) -> TensorNumpy:
 		
-		if Analyze is None:
-			Analyze = self._create_analyzer(method)
-		if isinstance(Analyze, AnalyzerBase) is False:
-			raise ValueError("Analyzer has to be an instance of some subclass of AnalyzerBase!")
+			
 		a = np.zeros(sample.shape, dtype = np.float64)
-		a = Analyze.analyze(sample[np.newaxis,:])
-		
-		if normalize is None:
-			normalize = {'bool_':False}
-		elif normalize['bool_'] is True and 'kind' not in normalize:
-			normalize['kind'] = 'MaxAbs'
+
+		if kind =='classic' and Analyze is not None:
+
+			if sample is None:
+
+				raise ValueError("No sample for classic analyzer to analyze!")
+	
+			if Analyze is list:
+				raise ValueError("classic analyzer cannot be a list!")
+
+			a = Analyze.analyze(sample[np.newaxis,:])
+
+		elif kind == 'letzgus' and Analyze is not None:
+
+			if bool(kwargs) is False:
+
+				raise ValueError("No Letzgus hyperparameters given!")
+
+			if sample is None:
+
+				raise ValueError("No sample to create letzgus analyzer!")			
+
+			if sample is not None and kwargs.__contains__('sampleLetzgus') is False:
+
+				warnings.warn("Letzgus might be analyzing a different sample than intended.")
+
+			elif sample is not None and kwargs.__contains__('sampleLetzgus'):
+
+				warnings.warn("Letzgus might be analyzing a different sample than intended.")
+				print(f"Max delta samples = {np.max(np.abs(sample-kwargs['sample']))}")
+
+			elif sample is None and kwargs.__contains__('sampleLetzgus'):
+
+				sample = kwargs['sampleLetzgus']
+
+			else:
+
+				raise ValueError("No sample for letzgus analyzer to be created!")
+
+			if Analyze is not list:
+
+				raise TypeError("letzgus Analyzer has to be a list of 3 analyzers!")
+
+			if len(Analyze) != 3:
+
+				raise ValueError("letzgus Analyzer has to be a list of 3 analyzers!")
+
+			a = Analyze[0].analyze(sample[np.newaxis,:]) \
+                          + Analyze[1].analyze(sample[np.newaxis,:]) \
+                          + Analyze[2].analyze(sample[np.newaxis,:])
+
+		elif kind == 'classic' and Analyze is None:
+
+			if sample is None:
+
+				raise ValueError("No sample for classic analyzer to analyze!")
+			
+
+			Analyze = self._create_analyzer(method, kind, sample, **kwargs)
+
+			a = Analyze.analyze(sample[np.newaxis,:])
+
+		elif kind == 'letzgus' and Analyze is None:
+
+			if bool(kwargs) is False:
+
+				raise ValueError("No Letzgus hyperparameters given!")
+
+			if sample is None:
+
+				raise ValueError("No sample to create letzgus analyzer!")			
+
+			if sample is not None and kwargs.__contains__('sampleLetzgus') is False:
+
+				warnings.warn("Letzgus might be analyzing a different sample than intended.")
+
+			elif sample is not None and kwargs.__contains__('sampleLetzgus'):
+
+				warnings.warn("Letzgus might be analyzing a different sample than intended.")
+				print(f"Max delta samples = {np.max(np.abs(sample-kwargs['sample']))}")
+
+			elif sample is None and kwargs.__contains__('sampleLetzgus'):
+
+				sample = kwargs['sampleLetzgus']
+
+			else:
+
+				raise ValueError("No sample for letzgus analyzer to be created!")
+
+			Analyze = self._create_analyzer(method, kind, sample, **kwargs)
+
+			a = Analyze[0].analyze(sample[np.newaxis,:]) \
+                          + Analyze[1].analyze(sample[np.newaxis,:]) \
+                          + Analyze[2].analyze(sample[np.newaxis,:])
+
 		else:
+
+			raise NotImplementedError("The only kinds of analyzers available are classic and letzgus!")
+
+		if normalize is None:
+
+			normalize = {'bool_':False}
+
+		elif normalize['bool_'] is True and 'kind' not in normalize:
+
+			normalize['kind'] = 'MaxAbs'
+
+		else:
+
 			pass
 
 		if normalize['bool_'] is True and normalize['kind'] == 'MaxAbs':
+
 			a /= np.max(np.abs(a))
+
 		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs':
+
 			raise NotImplementedError("Only MaxAbs normalization currently available!")
+
 		else:
+
 			pass
 
 		return a
 		
 	def analyze_samples(self,
 			    method: str,
+			    kind: str,
 			    samples: TensorNumpy,
-                            normalize: AnalysisNormalizeDict = {'bool_':True, 'kind': 'MaxAbs'}
+                            normalize: AnalysisNormalizeDict = {'bool_':True, 'kind': 'MaxAbs'},
+			    **kwargs
                           ) -> TensorNumpy:
 
-		Analyze = self._create_analyzer(method)
 		a = np.zeros(samples.shape, dtype = np.float64)
-
-		### TODO - Don't normalize here, do it in a vectorized fashion after
-
 		numSamples = samples.shape[0]
 
 		for i in range(numSamples):
-			a[i] = self._analyze_sample(method, samples[i], normalize, Analyze)
 
-		### Commented due to bug
-		#if normalize is None:
-		#	normalize = {'bool_':False}
-		#elif normalize['bool_'] is True and 'kind' not in normalize:
-		#	normalize['kind'] = 'MaxAbs'
-		#else:
-		#	pass
-		#
-		#if normalize['bool_'] is True and normalize['kind'] == 'MaxAbs':
-		#	### Axes to normalize over
-		#	axes = tuple(np.arange(np.ndim(a))[1:])
-		#	maxAbsSample = np.max(np.abs(a), axis = axes)
-		#	
-		#	"""
-		#	np.less_equal.outer(maxAbsSample, a), makes number of dimensions of
-		#	maxAbsSample == number of dimensions of a by adding many np.newaxis
-		#	"""
-		#	print(
-		#	a = np.divide(a, np.less_equal.outer(maxAbsSample, a))
-		#elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs':
-		#	raise NotImplementedError("Only MaxAbs normalization currently available!")
-		#else:
-		#	pass
+			a[i] = self._analyze_sample(method, kind, samples[i], normalize, None, **kwargs)
 
 		return a
 
@@ -144,7 +265,7 @@ class XAIR(XAI):
 		
 		### Finding _a_ref for a given y_ref
 
-		if method_reg == "flood":
+		if method_reg == "flooding":
 
 			_model_part = Model(inputs=self.model.input,
                           		   outputs=self.model.layers[-2].output)
@@ -157,23 +278,27 @@ class XAIR(XAI):
 
 			if _y >= y_ref:
 
-				_a_ref = np.maximum(np.zeros(_a_ref.shape),_a_ref-update)
-				_y = np.dot(model.layers[-1].get_weights()[0][:,0], _a_ref[:,0])
-				_counter +=1 
-				print(f'iteration {_counter} - y: {_y}', end='\r')	
-				if _counter > max_it:
-					print(f'! reference value {y_ref} was not reached within {round(max_it)} iterations!')
-					break
+				while _y >= y_ref:				
 
-			else:			
+					_a_ref = np.maximum(np.zeros(_a_ref.shape),_a_ref-_update)
+					_y = np.dot(self.model.layers[-1].get_weights()[0][:,0], _a_ref[:,0])
+					_counter +=1 
+					print(f'iteration {_counter} - y: {_y}', end='\r')	
+					if _counter > max_it:
+						print(f'! reference value {y_ref} was not reached within {round(max_it)} iterations!')
+						break
 
-				_a_ref = np.maximum(np.zeros(_a_ref.shape),_a_ref+update)
-				_y = np.dot(model.layers[-1].get_weights()[0][:,0], _a_ref[:,0])
-				_counter +=1 
-				print(f'iteration {_counter} - y: {_y}', end='\r')	
-				if _counter > max_it:
-					print(f'! reference value {y_ref} was not reached within {round(max_it)} iterations!')
-					break
+			else:	
+
+				while _y <= y_ref:		
+
+					_a_ref = np.maximum(np.zeros(_a_ref.shape),_a_ref+_update)
+					_y = np.dot(self.model.layers[-1].get_weights()[0][:,0], _a_ref[:,0])
+					_counter +=1 
+					print(f'iteration {_counter} - y: {_y}', end='\r')	
+					if _counter > max_it:
+						print(f'! reference value {y_ref} was not reached within {round(max_it)} iterations!')
+						break
 
 		else:
 
@@ -188,10 +313,43 @@ class XAIR(XAI):
 		W_in = self.model.layers[-2].get_weights()[0]
 		W_out = self.model.layers[-1].get_weights()[0]
 		bias_in = self.model.layers[-2].get_weights()[1]
-		
-		return model1, model2, model3
 
-	def benchmarkLetzgus(self,
+		inputs = Input(shape=(self.model.input.shape[1],))
+
+		dense11 = Dense(10, activation='relu', name='dense11')
+		dense12 = Dense(10, activation='relu', name='dense12')
+		dense13 = Dense(10, activation='relu', name='dense13')
+		dense21 = Dense(1, activation='linear', use_bias=False, name='dense21')
+		dense22 = Dense(1, activation='linear', use_bias=False, name='dense22')
+		dense23 = Dense(1, activation='linear', use_bias=False, name='dense23')	
+
+		x1 = dense11(inputs)
+		x2 = dense12(inputs)
+		x3 = dense13(inputs)
+
+		x1 = dense21(x1)
+		x2 = dense22(x2)
+		x3 = dense23(x3)
+
+		model1 = Model(inputs=inputs, outputs=x1)
+		model2 = Model(inputs=inputs, outputs=x2)
+		model3 = Model(inputs=inputs, outputs=x3)
+
+		model1.layers[getLayerIndexByName(model1, 'dense11')].set_weights([W_in, bias_in-_a_ref[:,0]])
+		model2.layers[getLayerIndexByName(model2, 'dense12')].set_weights([-W_in, -bias_in])
+		model3.layers[getLayerIndexByName(model3, 'dense13')].set_weights([-W_in, -bias_in+_a_ref[:,0]])
+
+		model1.layers[getLayerIndexByName(model1, 'dense21')].set_weights([W_out])
+		model2.layers[getLayerIndexByName(model2, 'dense22')].set_weights([W_out])
+		model3.layers[getLayerIndexByName(model3, 'dense23')].set_weights([-W_out])
+
+		model1.compile(loss='mse', optimizer='adam',metrics=['mae'])
+		model2.compile(loss='mse', optimizer='adam',metrics=['mae'])
+		model3.compile(loss='mse', optimizer='adam',metrics=['mae'])
+
+		return [model1, model2, model3]
+
+	def createLetzgus(self,
 			     sample: TensorNumpy, 
 			     y_ref: float, 
 			     step_width: float = 0.00005, 
@@ -199,25 +357,31 @@ class XAIR(XAI):
 			     method_reg: str = "flooding") -> tuple[Model, Model, Model]:
 
 		_a_ref = self.offsetLetzgus(sample, y_ref, step_width, max_it, method_reg)
-		model1, model2, model3 = self.triplicateLetzgus(_a_ref)
-
-		return model1, model2, model3
+		return self.triplicateLetzgus(_a_ref)
 
 	def quick_analyze(self) -> tuple[TensorNumpy, AnalysisStatsDict]:
 
-		if self.model is not None and self.method is not None and self.samples is not None:
+		if self.model is not None and self.method is not None and self.kind is not None and self.samples is not None and bool(self.kwargs):
+			
 			if self.normalize is None:
-				self.normalize = {'bool_':False, 'kind': ''}
-			A = self._create_analyzer(self.method)
-			a = self.analyze_samples(self.method, self.samples, self.normalize)
+				self.normalize = {'bool_': False, 'kind': ''}
+
+			a = self.analyze_samples(self.method, self.kind, self.samples, self.normalize, **self.kwargs)
+
 			statistics = self.compute_statistics(a)
+
 			return a, statistics
 
 		else:
 			raise ValueError("Not enough information provided to analyze automatically!")
 
+	def check_sample(self, sample):
 
-		
+		y = self.model.predict(sample[np.newaxis, :])
+		model1, model2, model3 = self.createLetzgus(sample, self.y_ref)
+		y_reg = model1.predict(sample[np.newaxis, :]) + model2.predict(sample[np.newaxis, :]) + model3.predict(sample[np.newaxis, :])
+
+		return y - y_reg - self.y_ref
 
 	@staticmethod
 	def compute_statistics(a: TensorNumpy) -> AnalysisStatsDict:
@@ -228,4 +392,6 @@ class XAIR(XAI):
 		Stats['mean'] = np.mean(a, axis = 0)
 		### TODO - Add more stats
 
-		return Stats	
+		return Stats
+
+	

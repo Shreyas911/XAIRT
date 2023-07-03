@@ -76,6 +76,15 @@ class TrainFullyConnected(KerasTrainer):
 		self.dirname = dirname
 		self.filename = filename	
 
+		self.model_metadata = {'layers' : self.layers,
+				       'losses' : self.losses,
+				       'optim'  : self.optim,
+				       'metrics': self.metrics}
+		self.train_metadata = {'batch_size'      : self.batch_size,
+				       'epochs'          : self.epochs,
+				       'validation_split': self.validation_split,
+				       'filename'        : self.filename,
+				       'dirname'         : self.dirname}
 		self._model_state = []
 
 	def _createModel(self) -> None:
