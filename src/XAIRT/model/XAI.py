@@ -317,9 +317,8 @@ class XAIR(XAI):
 		W_in = self.model.layers[-2].get_weights()[0]
 		W_out = self.model.layers[-1].get_weights()[0]
 		bias_in = self.model.layers[-2].get_weights()[1]
-
-		#print(pathlib.Path(__file__).parent.resolve())
-		#print(pathlib.Path().resolve())
+		if len(self.model.layers[-1].get_weights()) > 1:
+			bias_out = self.model.layers[-1].get_weights()[1]
 
 		savepath = self.model.save('model_orig.h5')
 
@@ -331,9 +330,17 @@ class XAIR(XAI):
 		model2.layers[-2].set_weights([-W_in, -bias_in])
 		model3.layers[-2].set_weights([-W_in, -bias_in+_a_ref[:,0]])
 
-		model1.layers[-1].set_weights([W_out])
-		model2.layers[-1].set_weights([W_out])
-		model3.layers[-1].set_weights([-W_out])
+		if len(self.model.layers[-1].get_weights()) > 1:
+
+			model1.layers[-1].set_weights([ W_out, bias_out])
+			model2.layers[-1].set_weights([ W_out, bias_out])
+			model3.layers[-1].set_weights([-W_out, bias_out])
+
+		else:
+
+			model1.layers[-1].set_weights([W_out])
+			model2.layers[-1].set_weights([W_out])
+			model3.layers[-1].set_weights([-W_out])
 
 		return [model1, model2, model3]
 
