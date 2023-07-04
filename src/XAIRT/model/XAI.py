@@ -7,6 +7,7 @@ from XAIRT.backend.types import ModelMetadata, TrainMetadata
 
 from XAIRT.backend.graph import getLayerIndexByName 
 
+import tensorflow.keras as keras
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Dense
 
@@ -17,6 +18,9 @@ from innvestigate.analyzer.base import AnalyzerBase
 import numpy as np
 
 import warnings
+import sys
+import os
+import pathlib
 
 __all__ = ["XAI", "XAIR"]
 
@@ -314,38 +318,22 @@ class XAIR(XAI):
 		W_out = self.model.layers[-1].get_weights()[0]
 		bias_in = self.model.layers[-2].get_weights()[1]
 
-		inputs = Input(shape=(self.model.input.shape[1],))
+		#print(pathlib.Path(__file__).parent.resolve())
+		#print(pathlib.Path().resolve())
 
-		dense11 = Dense(10, activation='relu', name='dense11')
-		dense12 = Dense(10, activation='relu', name='dense12')
-		dense13 = Dense(10, activation='relu', name='dense13')
-		dense21 = Dense(1, activation='linear', use_bias=False, name='dense21')
-		dense22 = Dense(1, activation='linear', use_bias=False, name='dense22')
-		dense23 = Dense(1, activation='linear', use_bias=False, name='dense23')	
+		savepath = self.model.save('model_orig.h5')
 
-		x1 = dense11(inputs)
-		x2 = dense12(inputs)
-		x3 = dense13(inputs)
+		model1 = keras.models.load_model(str(pathlib.Path().resolve()) + '/model_orig.h5')
+		model2 = keras.models.load_model(str(pathlib.Path().resolve()) + '/model_orig.h5')
+		model3 = keras.models.load_model(str(pathlib.Path().resolve()) + '/model_orig.h5')
 
-		x1 = dense21(x1)
-		x2 = dense22(x2)
-		x3 = dense23(x3)
+		model1.layers[-2].set_weights([W_in, bias_in-_a_ref[:,0]])
+		model2.layers[-2].set_weights([-W_in, -bias_in])
+		model3.layers[-2].set_weights([-W_in, -bias_in+_a_ref[:,0]])
 
-		model1 = Model(inputs=inputs, outputs=x1)
-		model2 = Model(inputs=inputs, outputs=x2)
-		model3 = Model(inputs=inputs, outputs=x3)
-
-		model1.layers[getLayerIndexByName(model1, 'dense11')].set_weights([W_in, bias_in-_a_ref[:,0]])
-		model2.layers[getLayerIndexByName(model2, 'dense12')].set_weights([-W_in, -bias_in])
-		model3.layers[getLayerIndexByName(model3, 'dense13')].set_weights([-W_in, -bias_in+_a_ref[:,0]])
-
-		model1.layers[getLayerIndexByName(model1, 'dense21')].set_weights([W_out])
-		model2.layers[getLayerIndexByName(model2, 'dense22')].set_weights([W_out])
-		model3.layers[getLayerIndexByName(model3, 'dense23')].set_weights([-W_out])
-
-		model1.compile(loss='mse', optimizer='adam',metrics=['mae'])
-		model2.compile(loss='mse', optimizer='adam',metrics=['mae'])
-		model3.compile(loss='mse', optimizer='adam',metrics=['mae'])
+		model1.layers[-1].set_weights([W_out])
+		model2.layers[-1].set_weights([W_out])
+		model3.layers[-1].set_weights([-W_out])
 
 		return [model1, model2, model3]
 
@@ -393,5 +381,3 @@ class XAIR(XAI):
 		### TODO - Add more stats
 
 		return Stats
-
-	
