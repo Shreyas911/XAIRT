@@ -1,2 +1,2 @@
 from __future__ import annotations
-import XAIRT.model.KerasTrainer
+import XAIRT.model.Trainer

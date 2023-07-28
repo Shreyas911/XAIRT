@@ -1,5 +1,6 @@
 """ Custom type hinting for XAIRT """
 
+from sklearn.linear_model import LinearRegression
 from tensorflow import Tensor
 from tensorflow.keras.models import Model
 from tensorflow.data import Dataset
@@ -26,7 +27,7 @@ OptionalList: TypeAlias = Union[T, list[T]]
 OptionalSequence: TypeAlias = Union[T, Sequence[T]]
 
 class LayerDict(TypedDict):
-	""" Custom typing hint for layer dict to be given to KerasTrainer and child classes """
+	""" Custom typing hint for layer dict to be given to Trainer and child classes """
 	
 	size      : int
 	activation: Union[str, None]

@@ -8,13 +8,15 @@ import tensorflow.keras as keras
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Dropout, Input
 from tensorflow.keras.callbacks import ModelCheckpoint
+
 from sklearn.utils import shuffle
+from sklearn.linear_model import LinearRegression
 
 import os
 
-__all__ = ["KerasTrainer", "TrainFullyConnected"]
+__all__ = ["Trainer", "TrainerNN", "TrainLR", "TrainFullyConnectedNN"]
 
-class KerasTrainer(metaclass=ABCMeta):
+class Trainer(metaclass=ABCMeta):
 
 	@abstractmethod
 	def __init__(self) -> None:
@@ -22,6 +24,20 @@ class KerasTrainer(metaclass=ABCMeta):
 
 	@abstractmethod
 	def _createModel(self) -> None:
+		pass
+
+	@abstractmethod
+	def _trainModel(self) -> None:
+		pass
+
+	@abstractmethod
+	def quickTrain(self) -> LinearRegression | Model:
+		pass
+
+class TrainerNN(Trainer):
+
+	@abstractmethod
+	def __init__(self) -> None:
 		pass
 
 	@abstractmethod
@@ -33,18 +49,44 @@ class KerasTrainer(metaclass=ABCMeta):
 		pass
 
 	@abstractmethod
-	def _trainModel(self) -> None:
-		pass
-
-	@abstractmethod
 	def loadBestModel(self) -> Model:
 		pass
 
-	@abstractmethod
-	def quickTrain(self) -> Model:
-		pass
+class TrainLR(Trainer):
 
-class TrainFullyConnected(KerasTrainer):
+	def __init__(self, 
+		     x: TensorNumpy, 
+                     y: TensorNumpy
+                     fit_intercept: bool = False) -> None:
+
+		super().__init__()
+
+		self.x = x
+		self.y = y
+                self.fit_intercept = fit_intercept
+                self._model_state = []
+		
+	def _createModel(self) -> None:
+
+                self.regr = LinearRegression(fit_intercept = self.fit_intercept)
+                self._model_state.append('created')
+
+	def _trainModel(self) -> None:
+
+                self.regr.fit(x, y)
+	        self._model_state.append('trained')
+
+	def quickTrain(self) -> LinearRegression:
+
+		self._model_state = []
+
+		self._createModel()
+		self._trainModel()
+
+		return self.regr
+
+
+class TrainFullyConnectedNN(TrainerNN):
 
 	def __init__(self, 
 		     x: TensorNumpy | Dataset, y: TensorNumpy | Dataset, 
