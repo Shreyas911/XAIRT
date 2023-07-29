@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 
 from XAIRT.backend.types import Optional, OptionalList
-from XAIRT.backend.types import TensorNumpy
+from XAIRT.backend.types import TensorNumpy, LinearRegression
 from XAIRT.backend.types import AnalysisNormalizeDict, AnalysisStatsDict
 from XAIRT.backend.types import ModelMetadata, TrainMetadata
 
@@ -22,16 +22,12 @@ import sys
 import os
 import pathlib
 
-__all__ = ["XAI", "XAIR"]
+__all__ = ["X", "XAI", "XLR", "XAIR"]
 
-class XAI(metaclass=ABCMeta):
+class X(metaclass=ABCMeta):
 
 	@abstractmethod
 	def __init__(self) -> None:
-		pass
-
-	@abstractmethod
-	def _create_analyzer(self) -> None:
 		pass
 
 	@abstractmethod
@@ -50,6 +46,120 @@ class XAI(metaclass=ABCMeta):
 	def compute_statistics(self) -> AnalysisStatsDict:
 		pass
 
+class XAI(X):
+
+	@abstractmethod
+	def __init__(self) -> None:
+		pass
+
+	@abstractmethod
+	def _create_analyzer(self) -> None:
+		pass
+
+class XLR(X):
+
+	def __init__(self,
+		     model: OptionalList[LinearRegression],
+		     samples: Optional[TensorNumpy] = None,
+		     normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
+		    ) -> None: 
+
+		super().__init__()
+		self.model = model
+		self.samples = samples
+		self.normalize = normalize
+		self._coef = self.model.coef_
+		self.fit_intercept = self.model.fit_intercept
+
+	def _get_root(self,
+		      model: OptionalList[LinearRegression]):
+
+		if self.fit_intercept is False:
+
+			self.x_tilde = np.zeros(self.samples.shape[1])
+
+		else:
+
+			raise NotImplementedError("fit_intercept has to be 0 for now, since it is unclear which root to choose for adjustment.")
+
+	def _analyze_sample(self,
+			    sample: TensorNumpy,
+			    normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
+			   ) -> TensorNumpy:
+
+		a = self._coef * (sample - self.x_tilde)
+
+		if normalize is None:
+
+			normalize = {'bool_':False}
+
+		elif normalize['bool_'] is True and 'kind' not in normalize:
+
+			normalize['kind'] = 'MaxAbs'
+
+		else:
+
+			pass
+
+		if normalize['bool_'] is True and normalize['kind'] == 'MaxAbs':
+
+			a /= np.max(np.abs(a))
+
+		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs':
+
+			raise NotImplementedError("Only MaxAbs normalization currently available!")
+
+		else:
+
+			pass
+
+		return a
+
+	def analyze_samples(self,
+			    samples: TensorNumpy,
+			    normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
+			   ) -> TensorNumpy:
+
+		a = np.zeros(samples.shape, dtype = np.float64)
+
+		numSamples = samples.shape[0]
+
+		for i in range(numSamples):
+
+			a[i] = self._analyze_sample(samples[i], normalize)
+
+		return a
+
+	def quick_analyze(self) -> tuple[TensorNumpy, AnalysisStatsDict]:
+
+		if self.model is not None and self.samples is not None:
+		
+			self._get_root(self.model)
+
+			if self.normalize is None:
+				self.normalize = {'bool_': False, 'kind': ''}
+
+			a = self.analyze_samples(self.samples, self.normalize)
+
+			statistics = self.compute_statistics(a)
+
+			return a, statistics
+
+		else:
+
+			raise ValueError("Not enough information provided to analyze automatically!")
+
+
+	@staticmethod
+	def compute_statistics(a: TensorNumpy) -> AnalysisStatsDict:
+		
+		Stats = {}
+
+		### Mean heatmap over all samples
+		Stats['mean'] = np.mean(a, axis = 0)
+		### TODO - Add more stats
+
+		return Stats
 
 class XAIR(XAI):
 
@@ -76,7 +186,7 @@ class XAIR(XAI):
 	def _create_analyzer(self, 
                              method: str, 
                              kind: str,
-			     sample: Optional[TensorNumpy],
+			     sample: TensorNumpy,
 			     #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12 
 		             **kwargs: int) -> OptionalList[AnalyzerBase]:
 		

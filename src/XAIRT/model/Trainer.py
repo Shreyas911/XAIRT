@@ -1,5 +1,5 @@
 from abc import ABCMeta, abstractmethod
-from XAIRT.backend.types import OptionalList, TensorNumpy
+from XAIRT.backend.types import Optional, OptionalList, TensorNumpy
 from XAIRT.backend.types import Dataset, LayerDict, LossDict
 
 import tensorflow as tf
@@ -56,25 +56,27 @@ class TrainLR(Trainer):
 
 	def __init__(self, 
 		     x: TensorNumpy, 
-                     y: TensorNumpy
-                     fit_intercept: bool = False) -> None:
+                     y: TensorNumpy,
+                     fit_intercept: Optional[bool] = False,
+		     y_ref: Optional[float] = 0.0) -> None:
 
 		super().__init__()
 
 		self.x = x
 		self.y = y
-                self.fit_intercept = fit_intercept
-                self._model_state = []
+		self.fit_intercept = fit_intercept
+		self.y_ref = y_ref
+		self._model_state = []
 		
 	def _createModel(self) -> None:
 
-                self.regr = LinearRegression(fit_intercept = self.fit_intercept)
-                self._model_state.append('created')
+		self.regr = LinearRegression(fit_intercept = self.fit_intercept)
+		self._model_state.append('created')
 
 	def _trainModel(self) -> None:
 
-                self.regr.fit(x, y)
-	        self._model_state.append('trained')
+		self.regr.fit(self.x, self.y-self.y_ref)
+		self._model_state.append('trained')
 
 	def quickTrain(self) -> LinearRegression:
 
