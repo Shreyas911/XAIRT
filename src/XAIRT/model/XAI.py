@@ -186,7 +186,7 @@ class XAIR(XAI):
 	def _create_analyzer(self, 
                              method: str, 
                              kind: str,
-			     sample: TensorNumpy,
+			     sample: Optional[TensorNumpy] = None,
 			     #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12 
 		             **kwargs: int) -> OptionalList[AnalyzerBase]:
 		
@@ -358,6 +358,7 @@ class XAIR(XAI):
 			    kind: str,
 			    samples: TensorNumpy,
                             normalize: AnalysisNormalizeDict = {'bool_':True, 'kind': 'MaxAbs'},
+			    Analyze: OptionalList[AnalyzerBase] = None,
 			    **kwargs
                           ) -> TensorNumpy:
 
@@ -366,7 +367,7 @@ class XAIR(XAI):
 
 		for i in range(numSamples):
 
-			a[i] = self._analyze_sample(method, kind, samples[i], normalize, None, **kwargs)
+			a[i] = self._analyze_sample(method, kind, samples[i], normalize, Analyze, **kwargs)
 
 		return a
 
@@ -471,7 +472,11 @@ class XAIR(XAI):
 			if self.normalize is None:
 				self.normalize = {'bool_': False, 'kind': ''}
 
-			a = self.analyze_samples(self.method, self.kind, self.samples, self.normalize, **self.kwargs)
+			if self.kind == 'letzgus':
+				a = self.analyze_samples(self.method, self.kind, self.samples, self.normalize, **self.kwargs)
+			else:
+				Analyze = self._create_analyzer(self.method, self.kind, **self.kwargs)
+				a = self.analyze_samples(self.method, self.kind, self.samples, self.normalize, Analyze, **self.kwargs)
 
 			statistics = self.compute_statistics(a)
 
