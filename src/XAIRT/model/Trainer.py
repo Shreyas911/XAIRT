@@ -193,7 +193,8 @@ class TrainFullyConnectedNN(TrainerNN):
             			epochs=self.epochs, 
             			shuffle=True,
             			validation_split = self.validation_split, 
-            			callbacks=self.callbacks) 
+            			callbacks=self.callbacks,
+						verbose = 0) 
 
 		self._model_state.append('trained')
 
