@@ -4,7 +4,7 @@ from sklearn.linear_model import LinearRegression
 from tensorflow import Tensor
 from tensorflow.keras.models import Model
 from tensorflow.data import Dataset
-from typing import Optional, Sequence, Union, Tuple, TypeAlias, TypeVar, TypedDict
+from typing import Optional, Sequence, Union, Tuple, TypeAlias, TypeVar, TypedDict, Dict
 import numpy as np
 
 # DUMMY for NotRequired since it is only available in Python 3.11 and onwards
@@ -75,3 +75,10 @@ class LetzgusDict(TypedDict):
 	step_width        : float
 	max_it            : int
 	method_reg        : str
+
+class XAIMethodsDict(TypedDict):
+	""" Custom typing hint for passing XAI methods information around """
+
+	name 	  : str
+	optParams : Dict
+	title     : str

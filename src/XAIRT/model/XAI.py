@@ -1,9 +1,10 @@
 from abc import ABCMeta, abstractmethod
 
-from XAIRT.backend.types import Optional, OptionalList
+from XAIRT.backend.types import Optional, OptionalList, Dict
 from XAIRT.backend.types import TensorNumpy, LinearRegression
 from XAIRT.backend.types import AnalysisNormalizeDict, AnalysisStatsDict
 from XAIRT.backend.types import ModelMetadata, TrainMetadata
+from XAIRT.backend.types import XAIMethodsDict
 
 from XAIRT.backend.graph import getLayerIndexByName 
 
@@ -58,11 +59,16 @@ class XAI(X):
 
 class XLR(X):
 
+	"""
+	In an XAI context, only normalized samples makes sense for XLR
+	Since all inputs should be of a similar scale to compare coeffs.
+	"""
+
 	def __init__(self,
-		     model: OptionalList[LinearRegression],
-		     samples: Optional[TensorNumpy] = None,
-		     normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
-		    ) -> None: 
+		     	 model: OptionalList[LinearRegression],
+		     	 samples: Optional[TensorNumpy] = None,
+		     	 normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
+		    	 ) -> None: 
 
 		super().__init__()
 		self.model = model
@@ -72,7 +78,7 @@ class XLR(X):
 		self.fit_intercept = self.model.fit_intercept
 
 	def _get_root(self,
-		      model: OptionalList[LinearRegression]):
+		      	  model: OptionalList[LinearRegression]):
 
 		if self.fit_intercept is False:
 
@@ -116,9 +122,9 @@ class XLR(X):
 		return a
 
 	def analyze_samples(self,
-			    samples: TensorNumpy,
-			    normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
-			   ) -> TensorNumpy:
+			    		samples: TensorNumpy,
+			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
+			    		) -> TensorNumpy:
 
 		a = np.zeros(samples.shape, dtype = np.float64)
 
@@ -164,14 +170,14 @@ class XLR(X):
 class XAIR(XAI):
 
 	def __init__(self, 
-		     model: OptionalList[Model],
-		     method: Optional[str] = None,
-		     kind: Optional[str] = None,
-		     samples: Optional[TensorNumpy] = None,
-		     normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'},
-		     #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
-		     **kwargs: int
-		    ) -> None:
+		     	 model: Optional[Model],
+		     	 method: Optional[XAIMethodsDict] = None,
+		     	 kind: Optional[str] = None,
+		     	 samples: Optional[TensorNumpy] = None,
+		     	 normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'},
+		     	 #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
+		     	 **kwargs: Dict
+		    	 ) -> None:
 
 		super().__init__()
 		self.model = model
@@ -184,15 +190,15 @@ class XAIR(XAI):
 		self.models_letzgus = []
 
 	def _create_analyzer(self, 
-                             method: str, 
-                             kind: str,
-			     sample: Optional[TensorNumpy] = None,
-			     #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12 
-		             **kwargs: int) -> OptionalList[AnalyzerBase]:
+                         method: XAIMethodsDict, 
+                         kind: str,
+			     		 sample: Optional[TensorNumpy] = None,
+			     		 #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12 
+		             	 **kwargs: Dict) -> OptionalList[AnalyzerBase]:
 		
 		if kind == 'classic':
 
-			Analyze = innvestigate.create_analyzer(method, self.model)
+			Analyze = innvestigate.create_analyzer(method['name'], self.model, **method['optParams'])
 
 		elif kind == 'letzgus':
 
@@ -206,9 +212,9 @@ class XAIR(XAI):
 
 			models_letzgus = self.createLetzgus(sample, **kwargs)
 
-			Analyze = [innvestigate.create_analyzer(method, models_letzgus[0]),
-				   innvestigate.create_analyzer(method, models_letzgus[1]),
-				   innvestigate.create_analyzer(method, models_letzgus[2])]
+			Analyze = [innvestigate.create_analyzer(method['name'], self.model, **method['optParams']),
+				   innvestigate.create_analyzer(method['name'], self.model, **method['optParams']),
+				   innvestigate.create_analyzer(method['name'], self.model, **method['optParams'])]
 
 		else:
 
@@ -217,14 +223,14 @@ class XAIR(XAI):
 		return Analyze
 
 	def _analyze_sample(self,
-			    method: str,
-			    kind: str,
-			    sample: Optional[TensorNumpy],
-			    normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'},
-			    Analyze: OptionalList[AnalyzerBase] = None,
-			    #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
-			    **kwargs: int
-			  ) -> TensorNumpy:
+			    		method: XAIMethodsDict,
+			    		kind: str,
+			    		sample: Optional[TensorNumpy],
+			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'},
+			    		Analyze: OptionalList[AnalyzerBase] = None,
+			    		#**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
+			    		**kwargs: Dict
+			  			) -> TensorNumpy:
 		
 			
 		a = np.zeros(sample.shape, dtype = np.float64)
@@ -276,8 +282,8 @@ class XAIR(XAI):
 				raise ValueError("letzgus Analyzer has to be a list of 3 analyzers!")
 
 			a = Analyze[0].analyze(sample[np.newaxis,:]) \
-                          + Analyze[1].analyze(sample[np.newaxis,:]) \
-                          + Analyze[2].analyze(sample[np.newaxis,:])
+              + Analyze[1].analyze(sample[np.newaxis,:]) \
+              + Analyze[2].analyze(sample[np.newaxis,:])
 
 		elif kind == 'classic' and Analyze is None:
 
@@ -320,8 +326,8 @@ class XAIR(XAI):
 			Analyze = self._create_analyzer(method, kind, sample, **kwargs)
 
 			a = Analyze[0].analyze(sample[np.newaxis,:]) \
-                          + Analyze[1].analyze(sample[np.newaxis,:]) \
-                          + Analyze[2].analyze(sample[np.newaxis,:])
+              + Analyze[1].analyze(sample[np.newaxis,:]) \
+              + Analyze[2].analyze(sample[np.newaxis,:])
 
 		else:
 
@@ -354,13 +360,13 @@ class XAIR(XAI):
 		return a
 		
 	def analyze_samples(self,
-			    method: str,
-			    kind: str,
-			    samples: TensorNumpy,
-                            normalize: AnalysisNormalizeDict = {'bool_':True, 'kind': 'MaxAbs'},
-			    Analyze: OptionalList[AnalyzerBase] = None,
-			    **kwargs
-                          ) -> TensorNumpy:
+			    		method: XAIMethodsDict,
+			    		kind: str,
+			    		samples: TensorNumpy,
+                        normalize: AnalysisNormalizeDict = {'bool_':True, 'kind': 'MaxAbs'},
+			    		Analyze: OptionalList[AnalyzerBase] = None,
+			    		**kwargs: Dict
+                    	) -> TensorNumpy:
 
 		a = np.zeros(samples.shape, dtype = np.float64)
 		numSamples = samples.shape[0]

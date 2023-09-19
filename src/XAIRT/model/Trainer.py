@@ -54,11 +54,16 @@ class TrainerNN(Trainer):
 
 class TrainLR(Trainer):
 
+	"""
+	In an XAI context, only a normalized x and y make sense for XLR.
+	Since all inputs should be of a similar scale to compare coeffs.
+	"""
+
 	def __init__(self, 
-		     x: TensorNumpy, 
-                     y: TensorNumpy,
-                     fit_intercept: Optional[bool] = False,
-		     y_ref: Optional[float] = 0.0) -> None:
+		    x: TensorNumpy, 
+        	y: TensorNumpy,
+            fit_intercept: Optional[bool] = False,
+		    y_ref: Optional[float] = 0.0) -> None:
 
 		super().__init__()
 
@@ -91,16 +96,16 @@ class TrainLR(Trainer):
 class TrainFullyConnectedNN(TrainerNN):
 
 	def __init__(self, 
-		     x: TensorNumpy | Dataset, y: TensorNumpy | Dataset, 
-		     layers: list[LayerDict],
-                     losses: OptionalList[LossDict], 
-		     optim: str, 
-                     metrics: list[str],
-                     batch_size: int, 
-                     epochs: int, 
-                     validation_split: float,
-                     filename: str,
-		     dirname: str) -> None:
+		    	x: TensorNumpy | Dataset, y: TensorNumpy | Dataset, 
+		    	layers: list[LayerDict],
+            	losses: OptionalList[LossDict], 
+		     	optim: str, 
+                metrics: list[str],
+                batch_size: int, 
+                epochs: int, 
+                validation_split: float,
+                filename: str,
+		     	dirname: str) -> None:
 
 		super().__init__()
 
