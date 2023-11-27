@@ -4,7 +4,10 @@ from sklearn.linear_model import LinearRegression
 from tensorflow import Tensor
 from tensorflow.keras.models import Model
 from tensorflow.data import Dataset
-from typing import Optional, Sequence, Union, Tuple, TypeAlias, TypeVar, TypedDict, Dict
+import tensorflow as tf
+from typing import Optional, Sequence, Union, Tuple
+from typing import TypeAlias, TypeVar, TypedDict, Dict
+from typing import Callable
 import numpy as np
 
 # DUMMY for NotRequired since it is only available in Python 3.11 and onwards
@@ -25,6 +28,9 @@ TensorNumpy: TypeAlias = np.ndarray[Tuple[int, ...], np.dtype[TNumpy]]
 # Alias for arguments that can either be a scalar or a list
 OptionalList: TypeAlias = Union[T, list[T]]
 OptionalSequence: TypeAlias = Union[T, Sequence[T]]
+
+# Alias for optimizer
+Optimizer = tf.keras.optimizers
 
 class LayerDict(TypedDict):
 	""" Custom typing hint for layer dict to be given to Trainer and child classes """

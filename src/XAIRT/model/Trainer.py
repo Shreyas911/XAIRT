@@ -1,13 +1,15 @@
 from abc import ABCMeta, abstractmethod
 from XAIRT.backend.types import Optional, OptionalList, TensorNumpy
 from XAIRT.backend.types import Dataset, LayerDict, LossDict
+from XAIRT.backend.types import Callable, Optimizer
 
 import tensorflow as tf
 import tensorflow.keras as keras
 
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Dropout, Input
-from tensorflow.keras.callbacks import ModelCheckpoint
+from tensorflow.keras.callbacks import ModelCheckpoint, LearningRateScheduler
+from keras.regularizers import l2
 
 from sklearn.utils import shuffle
 from sklearn.linear_model import LinearRegression
@@ -98,14 +100,16 @@ class TrainFullyConnectedNN(TrainerNN):
 	def __init__(self, 
 		    	x: TensorNumpy | Dataset, y: TensorNumpy | Dataset, 
 		    	layers: list[LayerDict],
-            	losses: OptionalList[LossDict], 
-		     	optim: str, 
+            	losses: OptionalList[LossDict],
+				optimizer: Optimizer,
                 metrics: list[str],
                 batch_size: int, 
                 epochs: int, 
                 validation_split: float,
                 filename: str,
-		     	dirname: str) -> None:
+		     	dirname: str,
+				decay_rate: Optional[float] = None
+				) -> None:
 
 		super().__init__()
 
@@ -115,7 +119,8 @@ class TrainFullyConnectedNN(TrainerNN):
 		self.layers = layers
 		
 		self.losses = losses
-		self.optim = optim
+		self.optimizer = optimizer
+		self.decay_rate = decay_rate
 		self.metrics = metrics
 		
 		self.batch_size = batch_size
@@ -126,15 +131,17 @@ class TrainFullyConnectedNN(TrainerNN):
 		self.filename = filename	
 
 		self.model_metadata = {'layers' : self.layers,
-				       'losses' : self.losses,
-				       'optim'  : self.optim,
-				       'metrics': self.metrics}
+				       		   'losses' : self.losses,
+				       		   'optimizer'  : self.optimizer,
+							   'decay_rate': self.decay_rate,
+				       		   'metrics': self.metrics}
 		self.train_metadata = {'batch_size'      : self.batch_size,
-				       'epochs'          : self.epochs,
-				       'validation_split': self.validation_split,
-				       'filename'        : self.filename,
-				       'dirname'         : self.dirname}
+				       		   'epochs'          : self.epochs,
+				       		   'validation_split': self.validation_split,
+				       		   'filename'        : self.filename,
+				       		   'dirname'         : self.dirname}
 		self._model_state = []
+		self.callbacks = []
 
 	def _createModel(self) -> None:
 
@@ -143,6 +150,8 @@ class TrainFullyConnectedNN(TrainerNN):
 		_sizes = [layer['size'] for layer in self.layers]
 		_activations = [layer['activation'] for layer in self.layers]
 		_use_biases = [layer['use_bias'] if 'use_bias' in layer else None for layer in self.layers]
+		_l2_w_regs = [layer['l2_w_reg'] if 'l2_w_reg' in layer else None for layer in self.layers]
+		_l2_b_regs = [layer['l2_b_reg'] if 'l2_b_reg' in layer else None for layer in self.layers]
 
 		if _activations[0] is not None:
 			raise ValueError("Input layer cannot have an activation")
@@ -150,12 +159,18 @@ class TrainFullyConnectedNN(TrainerNN):
 			raise ValueError("Input layer cannot have a bias.")
 
 		inputs = Input(shape=(_sizes[0],))
-		dense = Dense(_sizes[1], activation=_activations[1], use_bias = _use_biases[1])
+		dense = Dense(_sizes[1], 
+					  activation=_activations[1], use_bias = _use_biases[1],
+					  kernel_regularizer = l2(_l2_w_regs[1]),
+					  bias_regularizer=l2(_l2_b_regs[1]))
 		x = dense(inputs)
  
 		for i in range(2, len(_sizes)):
 		
-			dense = Dense(_sizes[i], activation=_activations[i], use_bias = _use_biases[i])
+			dense = Dense(_sizes[i], 
+						  activation=_activations[i], use_bias = _use_biases[i],
+						  kernel_regularizer = l2(_l2_w_regs[i]),
+					  	  bias_regularizer=l2(_l2_b_regs[i]))
 			x = dense(x)
 		
 		self.model = Model(inputs=inputs, outputs=x)
@@ -174,9 +189,17 @@ class TrainFullyConnectedNN(TrainerNN):
 		_loss_kinds = [loss['kind'] for loss in self.losses]
 		_loss_weights = [loss['weight'] for loss in self.losses]
 
-		self.model.compile(loss=_loss_kinds[0], optimizer=self.optim, metrics=self.metrics)
+		self.model.compile(loss=_loss_kinds[0], optimizer=self.optimizer, 
+						   metrics=self.metrics)
 
 		self._model_state.append('compiled')
+
+	def _lrateSchedule(self, decay_func: Callable) -> None:
+
+		self.lrate = LearningRateScheduler(decay_func)
+		self.callbacks.append(self.lrate)
+
+		self._model_state.append('lrate schedule')
 
 	def _createCheckpoint(self) -> None:
 
@@ -185,10 +208,9 @@ class TrainFullyConnectedNN(TrainerNN):
 		self.mod_txt  = os.path.join(self.dirname,
 		                             self.filename + '.txt')
 		self.checkpoint = ModelCheckpoint(self.mod_h5, monitor='val_loss',
-		                     verbose=1,save_best_only=True)
+		                     			  verbose=1,save_best_only=True)
 		
-		self.callbacks = [self.checkpoint]
-		
+		self.callbacks.append(self.checkpoint)
 		self._model_state.append('checkpointed')
 
 	def _trainModel(self) -> None:
@@ -212,12 +234,16 @@ class TrainFullyConnectedNN(TrainerNN):
 	
 		return best_model
 
-	def quickTrain(self) -> Model:
+	def quickTrain(self, decay_func: Optional[Callable] = None) -> Model:
 
 		self._model_state = []
 
 		self._createModel()
 		self._compileModel()
+
+		if decay_func is not None:
+			self._lrateSchedule(decay_func)
+
 		self._createCheckpoint()
 		self._trainModel()
 
