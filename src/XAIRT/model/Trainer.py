@@ -6,6 +6,7 @@ from XAIRT.backend.types import Callable, Optimizer
 import tensorflow as tf
 import tensorflow.keras as keras
 
+from tensorflow.keras import initializers
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Dropout, Input
 from tensorflow.keras.callbacks import ModelCheckpoint, LearningRateScheduler
@@ -108,6 +109,7 @@ class TrainFullyConnectedNN(TrainerNN):
                 validation_split: float,
                 filename: str,
 		     	dirname: str,
+				random_nn_seed: Optional[int] = None,
 				decay_rate: Optional[float] = None
 				) -> None:
 
@@ -129,6 +131,8 @@ class TrainFullyConnectedNN(TrainerNN):
 		
 		self.dirname = dirname
 		self.filename = filename	
+
+		self.random_nn_seed = random_nn_seed
 
 		self.model_metadata = {'layers' : self.layers,
 				       		   'losses' : self.losses,
@@ -161,7 +165,9 @@ class TrainFullyConnectedNN(TrainerNN):
 		inputs = Input(shape=(_sizes[0],))
 		dense = Dense(_sizes[1], 
 					  activation=_activations[1], use_bias = _use_biases[1],
-					  kernel_regularizer = l2(_l2_w_regs[1]),
+					  kernel_initializer=initializers.GlorotUniform(seed=self.random_nn_seed),
+					  bias_initializer=initializers.Zeros(),
+					  kernel_regularizer=l2(_l2_w_regs[1]),
 					  bias_regularizer=l2(_l2_b_regs[1]))
 		x = dense(inputs)
  
@@ -169,7 +175,9 @@ class TrainFullyConnectedNN(TrainerNN):
 		
 			dense = Dense(_sizes[i], 
 						  activation=_activations[i], use_bias = _use_biases[i],
-						  kernel_regularizer = l2(_l2_w_regs[i]),
+					  	  kernel_initializer=initializers.GlorotUniform(seed=self.random_nn_seed),
+					  	  bias_initializer=initializers.Zeros(),
+						  kernel_regularizer=l2(_l2_w_regs[i]),
 					  	  bias_regularizer=l2(_l2_b_regs[i]))
 			x = dense(x)
 		

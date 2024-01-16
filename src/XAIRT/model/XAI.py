@@ -67,7 +67,7 @@ class XLR(X):
 	def __init__(self,
 		     	 model: OptionalList[LinearRegression],
 		     	 samples: Optional[TensorNumpy] = None,
-		     	 normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
+		     	 normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'}
 		    	 ) -> None: 
 
 		super().__init__()
@@ -90,7 +90,7 @@ class XLR(X):
 
 	def _analyze_sample(self,
 			    sample: TensorNumpy,
-			    normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
+			    normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'}
 			   ) -> TensorNumpy:
 
 		a = self._coef * (sample - self.x_tilde)
@@ -101,7 +101,7 @@ class XLR(X):
 
 		elif normalize['bool_'] is True and 'kind' not in normalize:
 
-			normalize['kind'] = 'MaxAbs'
+			normalize['kind'] = 'Sum'
 
 		else:
 
@@ -111,9 +111,13 @@ class XLR(X):
 
 			a /= np.max(np.abs(a))
 
-		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs':
+		elif normalize['bool_'] is True and normalize['kind'] == 'Sum':
 
-			raise NotImplementedError("Only MaxAbs normalization currently available!")
+			a /= np.sum(a)
+
+		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs' and normalize['kind'] != 'Sum':
+
+			raise NotImplementedError("Only MaxAbs and Sum normalization currently available!")
 
 		else:
 
@@ -123,7 +127,7 @@ class XLR(X):
 
 	def analyze_samples(self,
 			    		samples: TensorNumpy,
-			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'}
+			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'}
 			    		) -> TensorNumpy:
 
 		a = np.zeros(samples.shape, dtype = np.float64)
@@ -174,7 +178,7 @@ class XAIR(XAI):
 		     	 method: Optional[XAIMethodsDict] = None,
 		     	 kind: Optional[str] = None,
 		     	 samples: Optional[TensorNumpy] = None,
-		     	 normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'},
+		     	 normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'},
 		     	 #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
 		     	 **kwargs: Dict
 		    	 ) -> None:
@@ -226,7 +230,7 @@ class XAIR(XAI):
 			    		method: XAIMethodsDict,
 			    		kind: str,
 			    		sample: Optional[TensorNumpy],
-			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'MaxAbs'},
+			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'},
 			    		Analyze: OptionalList[AnalyzerBase] = None,
 			    		#**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
 			    		**kwargs: Dict
@@ -339,7 +343,7 @@ class XAIR(XAI):
 
 		elif normalize['bool_'] is True and 'kind' not in normalize:
 
-			normalize['kind'] = 'MaxAbs'
+			normalize['kind'] = 'Sum'
 
 		else:
 
@@ -349,9 +353,13 @@ class XAIR(XAI):
 
 			a /= np.max(np.abs(a))
 
-		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs':
+		elif normalize['bool_'] is True and normalize['kind'] == 'Sum':
 
-			raise NotImplementedError("Only MaxAbs normalization currently available!")
+			a /= np.sum(a)
+
+		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs' and normalize['kind'] != 'Sum':
+
+			raise NotImplementedError("Only MaxAbs and Sum normalization currently available!")
 
 		else:
 
@@ -363,7 +371,7 @@ class XAIR(XAI):
 			    		method: XAIMethodsDict,
 			    		kind: str,
 			    		samples: TensorNumpy,
-                        normalize: AnalysisNormalizeDict = {'bool_':True, 'kind': 'MaxAbs'},
+                        normalize: AnalysisNormalizeDict = {'bool_':True, 'kind': 'Sum'},
 			    		Analyze: OptionalList[AnalyzerBase] = None,
 			    		**kwargs: Dict
                     	) -> TensorNumpy:
