@@ -2,6 +2,7 @@ from abc import ABCMeta, abstractmethod
 from XAIRT.backend.types import Optional, OptionalList, TensorNumpy
 from XAIRT.backend.types import Dataset, LayerDict, LossDict
 from XAIRT.backend.types import Callable, Optimizer
+from XAIRT.backend.types import kModel
 
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -34,7 +35,7 @@ class Trainer(metaclass=ABCMeta):
 		pass
 
 	@abstractmethod
-	def quickTrain(self) -> LinearRegression | Model:
+	def quickTrain(self) -> LinearRegression | kModel:
 		pass
 
 class TrainerNN(Trainer):
@@ -52,7 +53,7 @@ class TrainerNN(Trainer):
 		pass
 
 	@abstractmethod
-	def loadBestModel(self) -> Model:
+	def loadBestModel(self) -> kModel:
 		pass
 
 class TrainLR(Trainer):
@@ -233,7 +234,7 @@ class TrainFullyConnectedNN(TrainerNN):
 
 		self._model_state.append('trained')
 
-	def loadBestModel(self) -> Model:
+	def loadBestModel(self) -> kModel:
 
 		if self._model_state[-1] != 'trained':
 			raise Exception("Model is not trained!")
@@ -242,7 +243,7 @@ class TrainFullyConnectedNN(TrainerNN):
 	
 		return best_model
 
-	def quickTrain(self, decay_func: Optional[Callable] = None) -> Model:
+	def quickTrain(self, decay_func: Optional[Callable] = None) -> kModel:
 
 		self._model_state = []
 

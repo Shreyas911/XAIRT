@@ -3,7 +3,7 @@ from abc import ABCMeta, abstractmethod
 from XAIRT.backend.types import Optional, OptionalList, Dict
 from XAIRT.backend.types import TensorNumpy, LinearRegression
 from XAIRT.backend.types import AnalysisNormalizeDict, AnalysisStatsDict
-from XAIRT.backend.types import ModelMetadata, TrainMetadata
+from XAIRT.backend.types import kModel, ModelMetadata, TrainMetadata
 from XAIRT.backend.types import XAIMethodsDict
 
 from XAIRT.backend.graph import getLayerIndexByName 
@@ -174,7 +174,7 @@ class XLR(X):
 class XAIR(XAI):
 
 	def __init__(self, 
-		     	 model: Optional[Model],
+		     	 model: Optional[kModel],
 		     	 method: Optional[XAIMethodsDict] = None,
 		     	 kind: Optional[str] = None,
 		     	 samples: Optional[TensorNumpy] = None,
@@ -436,7 +436,7 @@ class XAIR(XAI):
 		return _a_ref
 
 	def triplicateLetzgus(self,
-			      _a_ref: TensorNumpy) -> tuple[Model, Model, Model]:
+			      _a_ref: TensorNumpy) -> tuple[kModel, kModel, kModel]:
 
 		# get weights and biases
 		W_in = self.model.layers[-2].get_weights()[0]
@@ -474,7 +474,7 @@ class XAIR(XAI):
 			     y_ref: float, 
 			     step_width: float = 0.00005, 
 			     max_it: int = 10e4, 
-			     method_reg: str = "flooding") -> tuple[Model, Model, Model]:
+			     method_reg: str = "flooding") -> tuple[kModel, kModel, kModel]:
 
 		_a_ref = self.offsetLetzgus(sample, y_ref, step_width, max_it, method_reg)
 		return self.triplicateLetzgus(_a_ref)
