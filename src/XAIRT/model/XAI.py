@@ -127,7 +127,7 @@ class XLR(X):
 
 	def analyze_samples(self,
 			    		samples: TensorNumpy,
-			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'}
+			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_': True, 'kind': 'Sum'}
 			    		) -> TensorNumpy:
 
 		a = np.zeros(samples.shape, dtype = np.float64)
@@ -217,8 +217,8 @@ class XAIR(XAI):
 			models_letzgus = self.createLetzgus(sample, **kwargs)
 
 			Analyze = [innvestigate.create_analyzer(method['name'], self.model, **method['optParams']),
-				   innvestigate.create_analyzer(method['name'], self.model, **method['optParams']),
-				   innvestigate.create_analyzer(method['name'], self.model, **method['optParams'])]
+				   	   innvestigate.create_analyzer(method['name'], self.model, **method['optParams']),
+					   innvestigate.create_analyzer(method['name'], self.model, **method['optParams'])]
 
 		else:
 
