@@ -56,8 +56,6 @@ def TrainOI_useGradientTape(model: kModel,
         g.watch(x)
         preds = model(x)
         loss = compute_loss(desired_labels, preds)
-        # Expand dimensions of scalar loss to (1,1)
-        # loss = tf.expand_dims(tf.expand_dims(loss, axis=(0,)), axis=(0,))
 
     # This has to be outside the with statement for efficiency, unless you want higher order derivatives.
     grads = g.gradient(loss, x)
