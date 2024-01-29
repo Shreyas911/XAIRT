@@ -1,7 +1,7 @@
 """ Custom type hinting for XAIRT """
 
 from sklearn.linear_model import LinearRegression
-from tensorflow import Tensor
+from tensorflow import Tensor, Variable
 from tensorflow.keras.models import Model
 from tensorflow.data import Dataset
 import tensorflow as tf
