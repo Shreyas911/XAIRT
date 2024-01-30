@@ -14,8 +14,9 @@ import tensorflow as tf
 # Get useful types from types.py
 from XAIRT.backend.types import kModel
 
-__all__ =["getLayerIndexByName", "GradientDescent_useGradientTape", 
-          "TrainOI_useGradientTape", "tf_to_numpy"]
+__all__ =["getLayerIndexByName", "GradientDescent_useGradientTape", "tf_to_numpy"]
+# __all__ =["getLayerIndexByName", "GradientDescent_useGradientTape", 
+#           "TrainOI_useGradientTape", "tf_to_numpy"]
 
 def getLayerIndexByName(model: kModel, layername: str) -> int:
 	for idx, layer in enumerate(model.layers):
