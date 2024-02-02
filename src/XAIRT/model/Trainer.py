@@ -11,7 +11,7 @@ from tensorflow.keras import initializers
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Dropout, Input
 from tensorflow.keras.callbacks import ModelCheckpoint, LearningRateScheduler
-from keras.regularizers import l2
+from keras.regularizers import L1L2
 
 from sklearn.utils import shuffle
 from sklearn.linear_model import LinearRegression
@@ -155,8 +155,10 @@ class TrainFullyConnectedNN(TrainerNN):
 		_sizes = [layer['size'] for layer in self.layers]
 		_activations = [layer['activation'] for layer in self.layers]
 		_use_biases = [layer['use_bias'] if 'use_bias' in layer else None for layer in self.layers]
-		_l2_w_regs = [layer['l2_w_reg'] if 'l2_w_reg' in layer else None for layer in self.layers]
-		_l2_b_regs = [layer['l2_b_reg'] if 'l2_b_reg' in layer else None for layer in self.layers]
+		_l1_w_regs = [layer['l1_w_reg'] if 'l1_w_reg' in layer else 0.0 for layer in self.layers]
+		_l1_b_regs = [layer['l1_b_reg'] if 'l1_b_reg' in layer else 0.0 for layer in self.layers]
+		_l2_w_regs = [layer['l2_w_reg'] if 'l2_w_reg' in layer else 0.0 for layer in self.layers]
+		_l2_b_regs = [layer['l2_b_reg'] if 'l2_b_reg' in layer else 0.0 for layer in self.layers]
 
 		if _activations[0] is not None:
 			raise ValueError("Input layer cannot have an activation")
@@ -168,8 +170,8 @@ class TrainFullyConnectedNN(TrainerNN):
 					  activation=_activations[1], use_bias = _use_biases[1],
 					  kernel_initializer=initializers.GlorotUniform(seed=self.random_nn_seed),
 					  bias_initializer=initializers.Zeros(),
-					  kernel_regularizer=l2(_l2_w_regs[1]),
-					  bias_regularizer=l2(_l2_b_regs[1]))
+					  kernel_regularizer=L1L2(l1 =_l1_w_regs[1], l2 = _l2_w_regs[1]),
+					  bias_regularizer=L1L2(l1 = _l1_b_regs[1], l2 = _l2_b_regs[1]))
 		x = dense(inputs)
  
 		for i in range(2, len(_sizes)):
@@ -178,8 +180,8 @@ class TrainFullyConnectedNN(TrainerNN):
 						  activation=_activations[i], use_bias = _use_biases[i],
 					  	  kernel_initializer=initializers.GlorotUniform(seed=self.random_nn_seed),
 					  	  bias_initializer=initializers.Zeros(),
-						  kernel_regularizer=l2(_l2_w_regs[i]),
-					  	  bias_regularizer=l2(_l2_b_regs[i]))
+						  kernel_regularizer=L1L2(l1 =_l1_w_regs[i], l2 = _l2_w_regs[i]),
+					  	  bias_regularizer=L1L2(l1 = _l1_b_regs[i], l2 = _l2_b_regs[i]))
 			x = dense(x)
 		
 		self.model = Model(inputs=inputs, outputs=x)
