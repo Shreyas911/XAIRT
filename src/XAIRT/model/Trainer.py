@@ -1,6 +1,6 @@
 from abc import ABCMeta, abstractmethod
 from XAIRT.backend.types import Optional, OptionalList, TensorNumpy
-from XAIRT.backend.types import Dataset, LayerDict, LossDict
+from XAIRT.backend.types import Dataset, LayerDict, LossDict, Dict, Tuple
 from XAIRT.backend.types import Callable, Optimizer
 from XAIRT.backend.types import kModel
 
@@ -107,11 +107,15 @@ class TrainFullyConnectedNN(TrainerNN):
                 metrics: list[str],
                 batch_size: int, 
                 epochs: int, 
-                validation_split: float,
                 filename: str,
 		     	dirname: str,
+				verbose: int = 1,
+                validation_split: Optional[float] = None,
+				validation_data: Optional[Tuple] = None,
+				class_weight: Optional[Dict] = None,
 				random_nn_seed: Optional[int] = None,
-				decay_rate: Optional[float] = None
+				decay_rate: Optional[float] = None,
+				custom_objects: Optional[Dict] = None
 				) -> None:
 
 		super().__init__()
@@ -125,10 +129,13 @@ class TrainFullyConnectedNN(TrainerNN):
 		self.optimizer = optimizer
 		self.decay_rate = decay_rate
 		self.metrics = metrics
+		self.verbose = verbose
 		
 		self.batch_size = batch_size
 		self.epochs = epochs
 		self.validation_split = validation_split
+		self.validation_data = validation_data
+		self.class_weight = class_weight
 		
 		self.dirname = dirname
 		self.filename = filename	
@@ -147,6 +154,7 @@ class TrainFullyConnectedNN(TrainerNN):
 				       		   'dirname'         : self.dirname}
 		self._model_state = []
 		self.callbacks = []
+		self.custom_objects = custom_objects
 
 	def _createModel(self) -> None:
 
@@ -159,6 +167,8 @@ class TrainFullyConnectedNN(TrainerNN):
 		_l1_b_regs = [layer['l1_b_reg'] if 'l1_b_reg' in layer else 0.0 for layer in self.layers]
 		_l2_w_regs = [layer['l2_w_reg'] if 'l2_w_reg' in layer else 0.0 for layer in self.layers]
 		_l2_b_regs = [layer['l2_b_reg'] if 'l2_b_reg' in layer else 0.0 for layer in self.layers]
+		_kernel_constraints = [layer['kernel_constraint'] if 'kernel_constraint' in layer else None for layer in self.layers]
+		_bias_constraints = [layer['bias_constraint'] if 'bias_constraint' in layer else None for layer in self.layers]
 
 		if _activations[0] is not None:
 			raise ValueError("Input layer cannot have an activation")
@@ -168,20 +178,24 @@ class TrainFullyConnectedNN(TrainerNN):
 		inputs = Input(shape=(_sizes[0],))
 		dense = Dense(_sizes[1], 
 					  activation=_activations[1], use_bias = _use_biases[1],
-					  kernel_initializer=initializers.GlorotUniform(seed=self.random_nn_seed),
-					  bias_initializer=initializers.Zeros(),
+					  kernel_initializer=initializers.HeNormal(seed=self.random_nn_seed),
+					  bias_initializer=initializers.HeNormal(seed=self.random_nn_seed),
 					  kernel_regularizer=L1L2(l1 =_l1_w_regs[1], l2 = _l2_w_regs[1]),
-					  bias_regularizer=L1L2(l1 = _l1_b_regs[1], l2 = _l2_b_regs[1]))
+					  bias_regularizer=L1L2(l1 = _l1_b_regs[1], l2 = _l2_b_regs[1]),
+					  kernel_constraint=_kernel_constraints[1],
+					  bias_constraint=_bias_constraints[1])
 		x = dense(inputs)
  
 		for i in range(2, len(_sizes)):
 		
 			dense = Dense(_sizes[i], 
 						  activation=_activations[i], use_bias = _use_biases[i],
-					  	  kernel_initializer=initializers.GlorotUniform(seed=self.random_nn_seed),
-					  	  bias_initializer=initializers.Zeros(),
+					  	  kernel_initializer=initializers.HeNormal(seed=self.random_nn_seed),
+					  	  bias_initializer=initializers.HeNormal(seed=self.random_nn_seed),
 						  kernel_regularizer=L1L2(l1 =_l1_w_regs[i], l2 = _l2_w_regs[i]),
-					  	  bias_regularizer=L1L2(l1 = _l1_b_regs[i], l2 = _l2_b_regs[i]))
+					  	  bias_regularizer=L1L2(l1 = _l1_b_regs[i], l2 = _l2_b_regs[i]),
+						  kernel_constraint=_kernel_constraints[i],
+						  bias_constraint=_bias_constraints[i])
 			x = dense(x)
 		
 		self.model = Model(inputs=inputs, outputs=x)
@@ -227,12 +241,14 @@ class TrainFullyConnectedNN(TrainerNN):
 	def _trainModel(self) -> None:
 
 		self._fit = self.model.fit(self.x, self.y,
-            			batch_size=self.batch_size,
-            			epochs=self.epochs, 
-            			shuffle=True,
-            			validation_split = self.validation_split, 
-            			callbacks=self.callbacks,
-						verbose = 0) 
+									batch_size = self.batch_size,
+									epochs = self.epochs,
+									shuffle = True,
+									validation_split = self.validation_split,
+									validation_data = self.validation_data,
+									callbacks = self.callbacks,
+									class_weight = self.class_weight,
+									verbose = self.verbose)
 
 		self._model_state.append('trained')
 
@@ -241,7 +257,7 @@ class TrainFullyConnectedNN(TrainerNN):
 		if self._model_state[-1] != 'trained':
 			raise Exception("Model is not trained!")
 
-		best_model = keras.models.load_model(self.mod_h5)
+		best_model = keras.models.load_model(self.mod_h5, custom_objects=self.custom_objects)
 	
 		return best_model
 

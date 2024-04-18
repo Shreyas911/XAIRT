@@ -109,11 +109,11 @@ class XLR(X):
 
 		if normalize['bool_'] is True and normalize['kind'] == 'MaxAbs':
 
-			a /= np.max(np.abs(a))
+			a /= np.nanmax(np.abs(a))
 
 		elif normalize['bool_'] is True and normalize['kind'] == 'Sum':
 
-			a /= np.sum(a)
+			a /= np.nansum(a)
 
 		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs' and normalize['kind'] != 'Sum':
 
@@ -166,7 +166,7 @@ class XLR(X):
 		Stats = {}
 
 		### Mean heatmap over all samples
-		Stats['mean'] = np.mean(a, axis = 0)
+		Stats['mean'] = np.nanmean(a, axis = 0)
 		### TODO - Add more stats
 
 		return Stats
@@ -235,9 +235,6 @@ class XAIR(XAI):
 			    		#**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
 			    		**kwargs: Dict
 			  			) -> TensorNumpy:
-		
-			
-		a = np.zeros(sample.shape, dtype = np.float64)
 
 		if kind =='classic' and Analyze is not None:
 
@@ -351,11 +348,11 @@ class XAIR(XAI):
 
 		if normalize['bool_'] is True and normalize['kind'] == 'MaxAbs':
 
-			a /= np.max(np.abs(a))
+			a /= np.nanmax(np.abs(a))
 
 		elif normalize['bool_'] is True and normalize['kind'] == 'Sum':
 
-			a /= np.sum(a)
+			a /= np.nansum(a)
 
 		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs' and normalize['kind'] != 'Sum':
 
@@ -513,7 +510,7 @@ class XAIR(XAI):
 		Stats = {}
 
 		### Mean heatmap over all samples
-		Stats['mean'] = np.mean(a, axis = 0)
+		Stats['mean'] = np.nanmean(a, axis = 0)
 		### TODO - Add more stats
 
 		return Stats
