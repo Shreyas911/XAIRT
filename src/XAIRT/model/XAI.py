@@ -334,6 +334,9 @@ class XAIR(XAI):
 
 			raise NotImplementedError("The only kinds of analyzers available are classic and letzgus!")
 
+		if np.nansum(a) == 0:
+			warnings.warn(message="Warning! All zeros probably detected in a sample during analyze step.")
+
 		if normalize is None:
 
 			normalize = {'bool_':False}
