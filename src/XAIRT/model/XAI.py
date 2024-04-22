@@ -334,9 +334,6 @@ class XAIR(XAI):
 
 			raise NotImplementedError("The only kinds of analyzers available are classic and letzgus!")
 
-		if np.nansum(a) == 0:
-			warnings.warn(message="Warning! All zeros probably detected in a sample during analyze step.")
-
 		if normalize is None:
 
 			normalize = {'bool_':False}
@@ -379,10 +376,13 @@ class XAIR(XAI):
 		a = np.zeros(samples.shape, dtype = np.float64)
 		numSamples = samples.shape[0]
 
+		count_allZeros = 0
 		for i in range(numSamples):
 
 			a[i] = self._analyze_sample(method, kind, samples[i], normalize, Analyze, **kwargs)
-
+			if np.nansum(a[i]) == 0:
+				count_allZeros = count_allZeros + 1
+		print(f"Number of all-zero samples detected : {count_allZeros} i.e. {count_allZeros*100.0/numSamples} %")
 		return a
 
 	def offsetLetzgus(self, 
