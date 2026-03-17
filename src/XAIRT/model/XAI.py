@@ -1,519 +1,425 @@
+import torch
+import torch.nn as nn
+import numpy as np
+import copy
 from abc import ABCMeta, abstractmethod
 
-from XAIRT.backend.types import Optional, OptionalList, Dict
-from XAIRT.backend.types import TensorNumpy, LinearRegression
-from XAIRT.backend.types import AnalysisNormalizeDict, AnalysisStatsDict
-from XAIRT.backend.types import kModel, ModelMetadata, TrainMetadata
-from XAIRT.backend.types import XAIMethodsDict
+from captum.attr import IntegratedGradients, Saliency, LRP, DeepLift
 
-from XAIRT.backend.graph import getLayerIndexByName 
+__all__ = ["X", "XLR", "XAI", "XAIR"]
 
-import tensorflow.keras as keras
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense
 
-import innvestigate
-import innvestigate.utils as iutils
-from innvestigate.analyzer.base import AnalyzerBase
-
-import numpy as np
-
-import warnings
-import sys
-import os
-import pathlib
-
-__all__ = ["X", "XAI", "XLR", "XAIR"]
+# ---------------------------------------------------------------------------
+# Abstract base
+# ---------------------------------------------------------------------------
 
 class X(metaclass=ABCMeta):
 
-	@abstractmethod
-	def __init__(self) -> None:
-		pass
+    @abstractmethod
+    def __init__(self) -> None: pass
 
-	@abstractmethod
-	def _analyze_sample(self) -> TensorNumpy:
-		pass
+    @abstractmethod
+    def _analyze_sample(self) -> np.ndarray: pass
 
-	@abstractmethod
-	def analyze_samples(self) -> TensorNumpy:
-		pass
+    @abstractmethod
+    def analyze_samples(self) -> np.ndarray: pass
 
-	@abstractmethod
-	def quick_analyze(self) -> tuple[TensorNumpy, AnalysisStatsDict]:
-		pass
+    @abstractmethod
+    def quick_analyze(self) -> tuple: pass
 
-	@abstractmethod
-	def compute_statistics(self) -> AnalysisStatsDict:
-		pass
+    @staticmethod
+    def compute_statistics(a: np.ndarray) -> dict:
+        return {'mean': np.nanmean(a, axis=0)}
 
-class XAI(X):
 
-	@abstractmethod
-	def __init__(self) -> None:
-		pass
-
-	@abstractmethod
-	def _create_analyzer(self) -> None:
-		pass
+# ---------------------------------------------------------------------------
+# XLR  –  Linear Regression XAI
+# ---------------------------------------------------------------------------
 
 class XLR(X):
-
-	"""
-	In an XAI context, only normalized samples makes sense for XLR
-	Since all inputs should be of a similar scale to compare coeffs.
-	"""
-
-	def __init__(self,
-		     	 model: OptionalList[LinearRegression],
-		     	 samples: Optional[TensorNumpy] = None,
-		     	 normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'}
-		    	 ) -> None: 
-
-		super().__init__()
-		self.model = model
-		self.samples = samples
-		self.normalize = normalize
-		self._coef = self.model.coef_
-		self.fit_intercept = self.model.fit_intercept
-
-	def _get_root(self,
-		      	  model: OptionalList[LinearRegression]):
-
-		if self.fit_intercept is False:
-
-			self.x_tilde = np.zeros(self.samples.shape[1])
-
-		else:
-
-			raise NotImplementedError("fit_intercept has to be 0 for now, since it is unclear which root to choose for adjustment.")
-
-	def _analyze_sample(self,
-			    sample: TensorNumpy,
-			    normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'}
-			   ) -> TensorNumpy:
-
-		a = self._coef * (sample - self.x_tilde)
-
-		if normalize is None:
-
-			normalize = {'bool_':False}
-
-		elif normalize['bool_'] is True and 'kind' not in normalize:
-
-			normalize['kind'] = 'Sum'
-
-		else:
-
-			pass
-
-		if normalize['bool_'] is True and normalize['kind'] == 'MaxAbs':
-
-			a /= np.nanmax(np.abs(a))
-
-		elif normalize['bool_'] is True and normalize['kind'] == 'Sum':
-
-			a /= np.nansum(a)
-
-		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs' and normalize['kind'] != 'Sum':
-
-			raise NotImplementedError("Only MaxAbs and Sum normalization currently available!")
-
-		else:
-
-			pass
-
-		return a
-
-	def analyze_samples(self,
-			    		samples: TensorNumpy,
-			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_': True, 'kind': 'Sum'}
-			    		) -> TensorNumpy:
-
-		a = np.zeros(samples.shape, dtype = np.float64)
-
-		numSamples = samples.shape[0]
-
-		for i in range(numSamples):
-
-			a[i] = self._analyze_sample(samples[i], normalize)
-
-		return a
-
-	def quick_analyze(self) -> tuple[TensorNumpy, AnalysisStatsDict]:
-
-		if self.model is not None and self.samples is not None:
-		
-			self._get_root(self.model)
-
-			if self.normalize is None:
-				self.normalize = {'bool_': False, 'kind': ''}
-
-			a = self.analyze_samples(self.samples, self.normalize)
-
-			statistics = self.compute_statistics(a)
-
-			return a, statistics
-
-		else:
-
-			raise ValueError("Not enough information provided to analyze automatically!")
-
-
-	@staticmethod
-	def compute_statistics(a: TensorNumpy) -> AnalysisStatsDict:
-		
-		Stats = {}
-
-		### Mean heatmap over all samples
-		Stats['mean'] = np.nanmean(a, axis = 0)
-		### TODO - Add more stats
-
-		return Stats
-
-class XAIR(XAI):
-
-	def __init__(self, 
-		     	 model: Optional[kModel],
-		     	 method: Optional[XAIMethodsDict] = None,
-		     	 kind: Optional[str] = None,
-		     	 samples: Optional[TensorNumpy] = None,
-		     	 normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'},
-		     	 #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
-		     	 **kwargs: Dict
-		    	 ) -> None:
-
-		super().__init__()
-		self.model = model
-		self.method = method
-		self.kind = kind
-		self.samples = samples
-		self.normalize = normalize
-		self.y_ref = kwargs['y_ref'] if kwargs.__contains__('y_ref') else 0.0
-		self.kwargs = kwargs
-		self.models_letzgus = []
-
-	def _create_analyzer(self, 
-                         method: XAIMethodsDict, 
-                         kind: str,
-			     		 sample: Optional[TensorNumpy] = None,
-			     		 #**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12 
-		             	 **kwargs: Dict) -> OptionalList[AnalyzerBase]:
-		
-		if kind == 'classic':
-
-			Analyze = innvestigate.create_analyzer(method['name'], self.model, **method['optParams'])
-
-		elif kind == 'letzgus':
-
-			if bool(kwargs) is False:
-
-				raise ValueError("No Letzgus hyperparameters given!")
-
-			if sample is None:
-
-				raise ValueError("No sample to create letzgus analyzer!")			
-
-			models_letzgus = self.createLetzgus(sample, **kwargs)
-
-			Analyze = [innvestigate.create_analyzer(method['name'], self.model, **method['optParams']),
-				   	   innvestigate.create_analyzer(method['name'], self.model, **method['optParams']),
-					   innvestigate.create_analyzer(method['name'], self.model, **method['optParams'])]
-
-		else:
-
-			raise NotImplementedError("The only kinds of analyzers available are classic and letzgus!")
-
-		return Analyze
-
-	def _analyze_sample(self,
-			    		method: XAIMethodsDict,
-			    		kind: str,
-			    		sample: Optional[TensorNumpy],
-			    		normalize: Optional[AnalysisNormalizeDict] = {'bool_':True, 'kind': 'Sum'},
-			    		Analyze: OptionalList[AnalyzerBase] = None,
-			    		#**kwargs: Unpack[LetzgusDict], #Will be compatible with Python 3.12
-			    		**kwargs: Dict
-			  			) -> TensorNumpy:
-
-		if kind =='classic' and Analyze is not None:
-
-			if sample is None:
-
-				raise ValueError("No sample for classic analyzer to analyze!")
-	
-			if Analyze is list:
-				raise ValueError("classic analyzer cannot be a list!")
-
-			a = Analyze.analyze(sample[np.newaxis,:])
-
-		elif kind == 'letzgus' and Analyze is not None:
-
-			if bool(kwargs) is False:
-
-				raise ValueError("No Letzgus hyperparameters given!")
-
-			if sample is None:
-
-				raise ValueError("No sample to create letzgus analyzer!")			
-
-			if sample is not None and kwargs.__contains__('sampleLetzgus') is False:
-
-				warnings.warn("Letzgus might be analyzing a different sample than intended.")
-
-			elif sample is not None and kwargs.__contains__('sampleLetzgus'):
-
-				warnings.warn("Letzgus might be analyzing a different sample than intended.")
-				print(f"Max delta samples = {np.max(np.abs(sample-kwargs['sample']))}")
-
-			elif sample is None and kwargs.__contains__('sampleLetzgus'):
-
-				sample = kwargs['sampleLetzgus']
-
-			else:
-
-				raise ValueError("No sample for letzgus analyzer to be created!")
-
-			if Analyze is not list:
-
-				raise TypeError("letzgus Analyzer has to be a list of 3 analyzers!")
-
-			if len(Analyze) != 3:
-
-				raise ValueError("letzgus Analyzer has to be a list of 3 analyzers!")
-
-			a = Analyze[0].analyze(sample[np.newaxis,:]) \
-              + Analyze[1].analyze(sample[np.newaxis,:]) \
-              + Analyze[2].analyze(sample[np.newaxis,:])
-
-		elif kind == 'classic' and Analyze is None:
-
-			if sample is None:
-
-				raise ValueError("No sample for classic analyzer to analyze!")
-			
-
-			Analyze = self._create_analyzer(method, kind, sample, **kwargs)
-
-			a = Analyze.analyze(sample[np.newaxis,:])
-
-		elif kind == 'letzgus' and Analyze is None:
-
-			if bool(kwargs) is False:
-
-				raise ValueError("No Letzgus hyperparameters given!")
-
-			if sample is None:
-
-				raise ValueError("No sample to create letzgus analyzer!")			
-
-			if sample is not None and kwargs.__contains__('sampleLetzgus') is False:
-
-				warnings.warn("Letzgus might be analyzing a different sample than intended.")
-
-			elif sample is not None and kwargs.__contains__('sampleLetzgus'):
-
-				warnings.warn("Letzgus might be analyzing a different sample than intended.")
-				print(f"Max delta samples = {np.max(np.abs(sample-kwargs['sample']))}")
-
-			elif sample is None and kwargs.__contains__('sampleLetzgus'):
-
-				sample = kwargs['sampleLetzgus']
-
-			else:
-
-				raise ValueError("No sample for letzgus analyzer to be created!")
-
-			Analyze = self._create_analyzer(method, kind, sample, **kwargs)
-
-			a = Analyze[0].analyze(sample[np.newaxis,:]) \
-              + Analyze[1].analyze(sample[np.newaxis,:]) \
-              + Analyze[2].analyze(sample[np.newaxis,:])
-
-		else:
-
-			raise NotImplementedError("The only kinds of analyzers available are classic and letzgus!")
-
-		if normalize is None:
-
-			normalize = {'bool_':False}
-
-		elif normalize['bool_'] is True and 'kind' not in normalize:
-
-			normalize['kind'] = 'Sum'
-
-		else:
-
-			pass
-
-		if normalize['bool_'] is True and normalize['kind'] == 'MaxAbs':
-
-			a /= np.nanmax(np.abs(a))
-
-		elif normalize['bool_'] is True and normalize['kind'] == 'Sum':
-
-			a /= np.nansum(a)
-
-		elif normalize['bool_'] is True and normalize['kind'] != 'MaxAbs' and normalize['kind'] != 'Sum':
-
-			raise NotImplementedError("Only MaxAbs and Sum normalization currently available!")
-
-		else:
-
-			pass
-
-		return a
-		
-	def analyze_samples(self,
-			    		method: XAIMethodsDict,
-			    		kind: str,
-			    		samples: TensorNumpy,
-                        normalize: AnalysisNormalizeDict = {'bool_':True, 'kind': 'Sum'},
-			    		Analyze: OptionalList[AnalyzerBase] = None,
-			    		**kwargs: Dict
-                    	) -> TensorNumpy:
-
-		a = np.zeros(samples.shape, dtype = np.float64)
-		numSamples = samples.shape[0]
-
-		count_allZeros = 0
-		for i in range(numSamples):
-
-			a[i] = self._analyze_sample(method, kind, samples[i], normalize, Analyze, **kwargs)
-			if np.nansum(a[i]) == 0:
-				count_allZeros = count_allZeros + 1
-		print(f"Number of all-zero samples detected : {count_allZeros} i.e. {count_allZeros*100.0/numSamples} %")
-		return a
-
-	def offsetLetzgus(self, 
-			  sample: TensorNumpy, 
-			  y_ref: float, 
-			  step_width: float = 0.00005, 
-			  max_it: int = 10e4, 
-			  method_reg: str = "flooding") -> TensorNumpy:
-		
-		### Finding _a_ref for a given y_ref
-
-		if method_reg == "flooding":
-
-			_model_part = Model(inputs=self.model.input,
-                          		   outputs=self.model.layers[-2].output)
-			_a_ref = _model_part.predict(sample[np.newaxis,:])[0,:]
-			_a_ref = _a_ref[:, np.newaxis]
-			_update = np.ones(_a_ref.shape) * step_width
-			_y = self.model.predict(sample[np.newaxis,:])
-
-			_counter = 0
-
-			if _y >= y_ref:
-
-				while _y >= y_ref:				
-
-					_a_ref = np.maximum(np.zeros(_a_ref.shape),_a_ref-_update)
-					_y = np.dot(self.model.layers[-1].get_weights()[0][:,0], _a_ref[:,0])
-					_counter +=1 
-					print(f'iteration {_counter} - y: {_y}', end='\r')	
-					if _counter > max_it:
-						print(f'! reference value {y_ref} was not reached within {round(max_it)} iterations!')
-						break
-
-			else:	
-
-				while _y <= y_ref:		
-
-					_a_ref = np.maximum(np.zeros(_a_ref.shape),_a_ref+_update)
-					_y = np.dot(self.model.layers[-1].get_weights()[0][:,0], _a_ref[:,0])
-					_counter +=1 
-					print(f'iteration {_counter} - y: {_y}', end='\r')	
-					if _counter > max_it:
-						print(f'! reference value {y_ref} was not reached within {round(max_it)} iterations!')
-						break
-
-		else:
-
-			raise NotImplementedError("The only method_reg available are : flooding")
-
-		return _a_ref
-
-	def triplicateLetzgus(self,
-			      _a_ref: TensorNumpy) -> tuple[kModel, kModel, kModel]:
-
-		# get weights and biases
-		W_in = self.model.layers[-2].get_weights()[0]
-		W_out = self.model.layers[-1].get_weights()[0]
-		bias_in = self.model.layers[-2].get_weights()[1]
-		if len(self.model.layers[-1].get_weights()) > 1:
-			bias_out = self.model.layers[-1].get_weights()[1]
-
-		savepath = self.model.save('model_orig.h5')
-
-		model1 = keras.models.load_model(str(pathlib.Path().resolve()) + '/model_orig.h5')
-		model2 = keras.models.load_model(str(pathlib.Path().resolve()) + '/model_orig.h5')
-		model3 = keras.models.load_model(str(pathlib.Path().resolve()) + '/model_orig.h5')
-
-		model1.layers[-2].set_weights([W_in, bias_in-_a_ref[:,0]])
-		model2.layers[-2].set_weights([-W_in, -bias_in])
-		model3.layers[-2].set_weights([-W_in, -bias_in+_a_ref[:,0]])
-
-		if len(self.model.layers[-1].get_weights()) > 1:
-
-			model1.layers[-1].set_weights([ W_out, bias_out])
-			model2.layers[-1].set_weights([ W_out, bias_out])
-			model3.layers[-1].set_weights([-W_out, bias_out])
-
-		else:
-
-			model1.layers[-1].set_weights([W_out])
-			model2.layers[-1].set_weights([W_out])
-			model3.layers[-1].set_weights([-W_out])
-
-		return [model1, model2, model3]
-
-	def createLetzgus(self,
-			     sample: TensorNumpy, 
-			     y_ref: float, 
-			     step_width: float = 0.00005, 
-			     max_it: int = 10e4, 
-			     method_reg: str = "flooding") -> tuple[kModel, kModel, kModel]:
-
-		_a_ref = self.offsetLetzgus(sample, y_ref, step_width, max_it, method_reg)
-		return self.triplicateLetzgus(_a_ref)
-
-	def quick_analyze(self) -> tuple[TensorNumpy, AnalysisStatsDict]:
-
-		if self.model is not None and self.method is not None and self.kind is not None and self.samples is not None and bool(self.kwargs):
-			
-			if self.normalize is None:
-				self.normalize = {'bool_': False, 'kind': ''}
-
-			if self.kind == 'letzgus':
-				a = self.analyze_samples(self.method, self.kind, self.samples, self.normalize, **self.kwargs)
-			else:
-				Analyze = self._create_analyzer(self.method, self.kind, **self.kwargs)
-				a = self.analyze_samples(self.method, self.kind, self.samples, self.normalize, Analyze, **self.kwargs)
-
-			statistics = self.compute_statistics(a)
-
-			return a, statistics
-
-		else:
-			raise ValueError("Not enough information provided to analyze automatically!")
-
-	def check_sample(self, sample):
-
-		y = self.model.predict(sample[np.newaxis, :])
-		model1, model2, model3 = self.createLetzgus(sample, self.y_ref)
-		y_reg = model1.predict(sample[np.newaxis, :]) + model2.predict(sample[np.newaxis, :]) + model3.predict(sample[np.newaxis, :])
-
-		return y - y_reg - self.y_ref
-
-	@staticmethod
-	def compute_statistics(a: TensorNumpy) -> AnalysisStatsDict:
-		
-		Stats = {}
-
-		### Mean heatmap over all samples
-		Stats['mean'] = np.nanmean(a, axis = 0)
-		### TODO - Add more stats
-
-		return Stats
+    """
+    Linear attribution for sklearn LinearRegression models.
+    Attribution = coef * (input - reference), where reference is zeros
+    (only valid when fit_intercept=False).
+    """
+
+    def __init__(self, model, samples: np.ndarray = None,
+                 normalize: dict = {'bool_': True, 'kind': 'Sum'}) -> None:
+        super().__init__()
+        self.model     = model
+        self.samples   = samples
+        self.normalize = normalize
+        self._coef     = model.coef_
+        self.fit_intercept = model.fit_intercept
+
+        if self.fit_intercept:
+            # With an intercept the zero-vector is not the natural reference;
+            # the correct root is ambiguous, so we refuse early.
+            raise NotImplementedError(
+                "fit_intercept=True is not supported for XLR: the zero-vector "
+                "is not a valid reference point when an intercept is present."
+            )
+        self.x_tilde = np.zeros(samples.shape[1])
+
+    def _apply_normalize(self, a: np.ndarray, normalize: dict) -> np.ndarray:
+        if normalize is None or not normalize.get('bool_', False):
+            return a
+        kind = normalize.get('kind', 'Sum')
+        if kind == 'MaxAbs':
+            denom = np.nanmax(np.abs(a))
+            return a / denom if denom != 0 else a
+        if kind == 'Sum':
+            denom = np.nansum(a)
+            return a / denom if denom != 0 else a
+        raise NotImplementedError(f"Normalization kind '{kind}' not supported. "
+                                  "Use 'MaxAbs' or 'Sum'.")
+
+    def _analyze_sample(self, sample: np.ndarray,
+                        normalize: dict = None) -> np.ndarray:
+        a = self._coef * (sample - self.x_tilde)
+        norm = normalize if normalize is not None else self.normalize
+        return self._apply_normalize(a, norm)
+
+    def analyze_samples(self, samples: np.ndarray = None,
+                        normalize: dict = None) -> np.ndarray:
+        S = samples if samples is not None else self.samples
+        return np.array([self._analyze_sample(s, normalize) for s in S])
+
+    def quick_analyze(self) -> tuple:
+        if self.model is None or self.samples is None:
+            raise ValueError("model and samples must both be set before "
+                             "calling quick_analyze().")
+        a = self.analyze_samples(self.samples, self.normalize)
+        return a, self.compute_statistics(a)
+
+
+# ---------------------------------------------------------------------------
+# XAI  –  Neural-Network XAI via Captum
+# ---------------------------------------------------------------------------
+
+class XAI(X):
+    """
+    Neural-network XAI using Captum as the attribution backend.
+    Mirrors the original Keras XAIR interface.
+
+    Parameters
+    ----------
+    model     : nn.Module  – trained PyTorch model (eval mode set automatically)
+    method    : dict       – {'name': str, 'optParams': dict}
+                             name: 'saliency' | 'integrated_gradients' |
+                                   'deeplift' | 'lrp'
+    kind      : str        – 'classic' | 'letzgus'
+    samples   : np.ndarray – shape (N, n_features)
+    normalize : dict       – {'bool_': bool, 'kind': 'Sum'|'MaxAbs'}
+    y_ref     : float      – reference output for Letzgus (passed as kwarg)
+    """
+
+    def __init__(self, model: nn.Module,
+                 method: dict = None,
+                 kind: str = None,
+                 samples: np.ndarray = None,
+                 normalize: dict = {'bool_': True, 'kind': 'Sum'},
+                 **kwargs) -> None:
+        super().__init__()
+        self.model   = model
+        for module in self.model.modules():
+            if isinstance(module, torch.nn.ReLU):
+                module.inplace = False
+        self.model.eval()
+        self.method  = method
+        self.kind    = kind
+        self.samples = samples
+        self.normalize = normalize
+        self.y_ref   = kwargs.get('y_ref', 0.0)
+        self.kwargs  = kwargs
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _get_analyzer(self, method_name: str):
+        """Maps method name string to a Captum attribution object."""
+        name = method_name.lower()
+        if name == 'saliency':            return Saliency(self.model)
+        if name == 'integrated_gradients': return IntegratedGradients(self.model)
+        if name == 'deeplift':            return DeepLift(self.model)
+        if name == 'lrp':                 return LRP(self.model)
+        raise NotImplementedError(
+            f"Method '{method_name}' is not mapped. "
+            "Available: saliency, integrated_gradients, deeplift, lrp."
+        )
+
+    def _apply_normalize(self, a: np.ndarray, normalize: dict) -> np.ndarray:
+        if normalize is None or not normalize.get('bool_', False):
+            return a
+        kind = normalize.get('kind', 'Sum')
+        if kind == 'MaxAbs':
+            denom = np.nanmax(np.abs(a))
+            return a / denom if denom != 0 else a
+        if kind == 'Sum':
+            denom = np.nansum(a)
+            return a / denom if denom != 0 else a
+        raise NotImplementedError(f"Normalization kind '{kind}' not supported.")
+
+    def _get_target_idx(self, sample_t: torch.Tensor) -> int:
+        """
+        Returns the predicted class index for a single-sample tensor.
+        For scalar regression output, returns 0.
+        """
+        with torch.no_grad():
+            output = self.model(sample_t)
+        if output.shape[-1] == 1:
+            return 0
+        return int(torch.argmax(output, dim=1).item())
+
+    # ------------------------------------------------------------------
+    # Core analysis
+    # ------------------------------------------------------------------
+
+    def _analyze_sample(self, sample: np.ndarray,
+                        method: dict,
+                        kind: str,
+                        normalize: dict = None,
+                        **kwargs) -> np.ndarray:
+        """
+        Attribute a single sample. Returns an array of the same shape.
+        """
+        # Fresh tensor with grad enabled for Captum
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(device)
+        sample_t = torch.from_numpy(sample.copy()).float().to(device).unsqueeze(0)
+        target_idx = self._get_target_idx(sample_t)
+
+        if kind == 'classic':
+            analyzer = self._get_analyzer(method['name'])
+            # Captum requires requires_grad=True on the input
+            inp = sample_t.detach().requires_grad_(True)
+            attr = analyzer.attribute(inp, target=target_idx)
+            a = attr.detach().cpu().numpy().flatten()
+
+        elif kind == 'letzgus':
+            models = self.createLetzgus(sample_t, self.y_ref)
+            attrs = []
+            for m in models:
+                ig  = IntegratedGradients(m)
+                inp = sample_t.detach().requires_grad_(True)
+                ig_attr = ig.attribute(inp, target=target_idx)
+                attrs.append(ig_attr.detach().cpu().numpy().flatten())
+            a = np.sum(attrs, axis=0)
+
+        else:
+            raise NotImplementedError(
+                f"kind='{kind}' is not supported. Use 'classic' or 'letzgus'."
+            )
+
+        norm = normalize if normalize is not None else self.normalize
+        a = self._apply_normalize(a, norm)
+        return a.reshape(sample.shape)
+
+    def analyze_samples(self, samples: np.ndarray = None,
+                        method: dict = None,
+                        kind: str = None,
+                        normalize: dict = None,
+                        **kwargs) -> np.ndarray:
+        """
+        Attribute all samples. Returns array of same shape as samples.
+        Counts and reports all-zero attribution vectors (sign of a bug).
+        """
+        S   = samples if samples is not None else self.samples
+        m   = method  if method  is not None else self.method
+        k   = kind    if kind    is not None else self.kind
+        nrm = normalize if normalize is not None else self.normalize
+
+        a = np.zeros(S.shape, dtype=np.float64)
+        n_zero = 0
+        for i in range(len(S)):
+            a[i] = self._analyze_sample(S[i], m, k, nrm, **kwargs)
+            if np.nansum(np.abs(a[i])) == 0:
+                n_zero += 1
+
+        print(f"All-zero attribution vectors: {n_zero} / {len(S)} "
+              f"({100.0 * n_zero / len(S):.1f}%)")
+        return a
+
+    def quick_analyze(self) -> tuple:
+        """Full pipeline: attribute self.samples, return (attributions, stats)."""
+        missing = [name for name, val in [
+            ('model',   self.model),
+            ('method',  self.method),
+            ('kind',    self.kind),
+            ('samples', self.samples),
+        ] if val is None]
+        if missing:
+            raise ValueError(
+                f"Cannot run quick_analyze(): {missing} are not set."
+            )
+        a = self.analyze_samples()
+        return a, self.compute_statistics(a)
+
+    # ------------------------------------------------------------------
+    # Letzgus helpers
+    # ------------------------------------------------------------------
+
+    def _get_linear_layers_and_output(self):
+        """
+        Returns (partial_model, output_linear) where:
+          - partial_model  : nn.Sequential of everything up to but NOT including
+                             the last nn.Linear layer
+          - output_linear  : the last nn.Linear layer object
+
+        Works correctly for the architecture produced by TrainFullyConnectedNN:
+          [Linear, ReLU, Linear, ReLU, Linear, Softmax]
+
+        The key correctness constraint for Letzgus is that we need the
+        pre-activation values feeding INTO the last Linear, so partial_model
+        must stop right before the last Linear (not at the last activation).
+        """
+        all_children = list(self.model.children())
+
+        # Find the last child that is an nn.Linear
+        last_lin_idx = max(
+            (i for i, c in enumerate(all_children) if isinstance(c, nn.Linear)),
+            default=None
+        )
+        if last_lin_idx is None or last_lin_idx == 0:
+            raise ValueError("Model must have at least 2 nn.Linear layers "
+                             "for Letzgus analysis.")
+
+        partial_model = nn.Sequential(*all_children[:last_lin_idx])
+        output_linear = all_children[last_lin_idx]   # guaranteed nn.Linear
+
+        if not isinstance(output_linear, nn.Linear):
+            raise ValueError(
+                f"Expected nn.Linear at child index {last_lin_idx}, "
+                f"got {type(output_linear)}."
+            )
+        return partial_model, output_linear
+
+    def offsetLetzgus(self, sample_t: torch.Tensor,
+                      y_ref: float,
+                      step_width: float = 0.00005,
+                      max_it: int = 10_000) -> torch.Tensor:
+        """
+        Iteratively adjusts the penultimate-layer activation until the model
+        output equals y_ref (flooding method). Returns the adjusted a_ref.
+
+        Fixes vs uploaded version:
+          - output_layer is always nn.Linear (not nn.Softmax)
+          - current_y correctly indexes the target class for multi-output nets
+          - target_idx is computed once and reused inside the loop
+        """
+        partial_model, output_linear = self._get_linear_layers_and_output()
+
+        with torch.no_grad():
+            a_ref = partial_model(sample_t.detach()).squeeze()  # (hidden_size,)
+
+            # Get initial target class from full model
+            target_idx = self._get_target_idx(sample_t)
+
+            def _forward_last(a):
+                """Compute output of the last linear for a given activation."""
+                y_vec = torch.matmul(output_linear.weight, a)
+                if output_linear.bias is not None:
+                    y_vec = y_vec + output_linear.bias
+                # For multi-output: return scalar for target class
+                return y_vec[target_idx].item() if y_vec.numel() > 1 else y_vec.item()
+
+            current_y = _forward_last(a_ref)
+            update    = torch.full_like(a_ref, step_width)
+            counter   = 0
+
+            while abs(current_y - y_ref) > 1e-4 and counter < max_it:
+                a_ref     = torch.clamp(a_ref + (-update if current_y >= y_ref else update), min=0.0)
+                current_y = _forward_last(a_ref)
+                counter  += 1
+                print(f"iteration {counter:6d} | y: {current_y:.6f}", end='\r')
+
+            if counter >= max_it:
+                print(f"\n! y_ref={y_ref} not reached within {max_it} iterations "
+                      f"(final y={current_y:.6f}).")
+            else:
+                print()   # newline after \r progress
+
+        return a_ref
+
+    def triplicateLetzgus(self, a_ref: torch.Tensor) -> list:
+        """
+        Builds the 3-model Letzgus ensemble by weight manipulation.
+
+        Model semantics (mirrors original Keras version):
+          m1: penultimate bias shifted down by a_ref
+          m2: penultimate weights and bias negated
+          m3: penultimate weights negated, bias = -bias + a_ref,
+              output weights negated
+
+        Fix vs uploaded version:
+          - Layer assignment uses .data[:] = ... instead of direct
+            parameter replacement (= ...), which would detach the
+            tensor from the parameter graph and break state_dict().
+        """
+        if not hasattr(self, '_letzgus_models'):
+            self._letzgus_models = [
+                copy.deepcopy(self.model), 
+                copy.deepcopy(self.model), 
+                copy.deepcopy(self.model)
+                ]
+
+        m1, m2, m3 = self._letzgus_models
+        def _get_linear_pair(m):
+            # Helper to get the penultimate and final linear layers
+            linears = [l for l in m.modules() if isinstance(l, nn.Linear)]
+            if len(linears) < 2:
+                raise ValueError("Model requires at least 2 Linear layers.")
+            return linears[-2], linears[-1]
+
+        with torch.no_grad():
+            # Get layer references
+            l1_pen, l1_out = _get_linear_pair(m1)
+            l2_pen, l2_out = _get_linear_pair(m2)
+            l3_pen, l3_out = _get_linear_pair(m3)
+        
+            # Original weights/biases for resetting (from self.model)
+            orig_pen, orig_out = _get_linear_pair(self.model)
+
+            # Model 1: Penultimate bias shifted by a_ref
+            l1_pen.bias.copy_(orig_pen.bias - a_ref)
+        
+            # Model 2: Negate penultimate weights and bias
+            l2_pen.weight.copy_(orig_pen.weight * -1)
+            l2_pen.bias.copy_(orig_pen.bias * -1)
+
+            # Model 3: Negate penultimate weight; bias = -orig_bias + a_ref; negate output weight
+            l3_pen.weight.copy_(orig_pen.weight * -1)
+            l3_pen.bias.copy_((orig_pen.bias * -1) + a_ref)
+            l3_out.weight.copy_(orig_out.weight * -1)
+
+        return [m1, m2, m3]
+
+    def createLetzgus(self, sample_t: torch.Tensor, y_ref: float) -> list:
+        a_ref = self.offsetLetzgus(sample_t, y_ref)
+        return self.triplicateLetzgus(a_ref)
+
+    def check_sample(self, sample: np.ndarray) -> float:
+        """
+        Sanity check: the sum of the three Letzgus model outputs should
+        equal (model_output - y_ref). Returns the residual; should be ~0.
+        """
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(device)
+        sample_t = torch.from_numpy(sample.copy()).float().to(device).unsqueeze(0)
+        with torch.no_grad():
+            y_full = self.model(sample_t)
+            target_idx = self._get_target_idx(sample_t)
+            y = y_full[0, target_idx].item() if y_full.numel() > 1 else y_full.item()
+        models = self.createLetzgus(sample_t, self.y_ref)
+        with torch.no_grad():
+            y_sum = sum(
+                m(sample_t)[0, target_idx].item()
+                if m(sample_t).numel() > 1 else m(sample_t).item()
+                for m in models
+            )
+        return y - y_sum - self.y_ref
+
+
+# Backwards-compatible alias
+XAIR = XAI
