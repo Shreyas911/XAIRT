@@ -1,71 +1,78 @@
-""" Low-level operations with Keras """
 from __future__ import annotations
-
-import warnings
+import torch
 import numpy as np
+import warnings
+
+# Standardizing internal types for Torch
+from XAIRT.backend.types import Tensor, TensorNumpy, Callable, Optimizer
+
 warnings.simplefilter("ignore")
 
-from XAIRT.backend.types import Tensor, TensorNumpy
-from XAIRT.backend.types import Callable, Optimizer, Variable
+__all__ = ["getLayerIndexByName", "get_gradients", "to_numpy"]
 
-import tensorflow.keras as keras
-import tensorflow as tf
+def getLayerIndexByName(model: torch.nn.Module, layername: str) -> int:
+    """
+    In PyTorch, modules are often nested. This searches the flat 
+    named_modules list to find the index.
+    """
+    for idx, (name, layer) in enumerate(model.named_modules()):
+        # named_modules includes the parent 'model' at index 0
+        if name == layername:
+            return idx
+    raise ValueError(f"Layer name: {layername} not found in model.")
 
-# Get useful types from types.py
-from XAIRT.backend.types import kModel
-
-__all__ =["getLayerIndexByName", "GradientDescent_useGradientTape", "tf_to_numpy"]
-# __all__ =["getLayerIndexByName", "GradientDescent_useGradientTape", 
-#           "TrainOI_useGradientTape", "tf_to_numpy"]
-
-def getLayerIndexByName(model: kModel, layername: str) -> int:
-	for idx, layer in enumerate(model.layers):
-		if layer.name == layername: 
-			return idx
-	raise ValueError(f"layername: {layername} not found.")
-
-# Vanilla gradient descent
-@tf.function # Crucial function decorator for speedup
-def GradientDescent_useGradientTape(model: kModel, 
-					x: Tensor,
-					desired_labels: Tensor,
-					compute_loss: Callable) -> Tensor:
-
-    with tf.GradientTape() as g:
-        g.watch(x)
-        preds = model(x)
-        loss = compute_loss(desired_labels, preds)
+def get_gradients(model: torch.nn.Module, 
+                  x: torch.Tensor, 
+                  desired_labels: torch.Tensor, 
+                  compute_loss: Callable) -> torch.Tensor:
+    """
+    Replaces GradientDescent_useGradientTape.
+    Calculates the gradient of the loss with respect to the input x.
+    """
+    # Ensure x tracks gradients
+    if not x.requires_grad:
+        x = x.clone().detach().requires_grad_(True)
     
-    # This has to be outside the with statement for efficiency, unless you want higher order derivatives.
-    grads = g.gradient(loss, x)
-
+    # Forward pass
+    preds = model(x)
+    loss = compute_loss(preds, desired_labels)
+    
+    # Calculate gradients: d(loss)/d(x)
+    # create_graph=False unless you need second-order derivatives (Hessians)
+    grads = torch.autograd.grad(outputs=loss, inputs=x, 
+                                 retain_graph=False, 
+                                 create_graph=False)[0]
+    
     return grads
 
-### NOT WORKING AS INTENDED SO FAR
-# ### NOTE: Requires eager execution to be ENABLED
-# @tf.function # Crucial function decorator for speedup
-# def TrainOI_useGradientTape(model: kModel,
-# 					  x: Variable,
-# 					  desired_labels: Variable,
-# 					  compute_loss: Callable,
-#                       optimizer: Optimizer) -> None:
+def train_step_input(model: torch.nn.Module,
+                     x: torch.Tensor,
+                     desired_labels: torch.Tensor,
+                     compute_loss: Callable,
+                     optimizer: Optimizer) -> torch.Tensor:
+    """
+    PyTorch equivalent of the 'TrainOI' block. 
+    Updates the INPUT 'x' using an optimizer.
+    """
+    # PyTorch optimizers work on lists of tensors
+    # We ensure x is the only thing the optimizer sees
+    optimizer.zero_grad()
+    
+    preds = model(x)
+    loss = compute_loss(preds, desired_labels)
+    loss.backward()
+    
+    optimizer.step()
+    
+    return loss.detach()
 
-#     # Because apply_gradient takes list of (gradient, variable) pairs, 
-#     # input must be a instance of tf.Variable rather than tf.Tensor.
-#     # https://github.com/tensorflow/tensorflow/issues/31273
-#     # https://colab.research.google.com/github/tensorflow/docs/blob/snapshot-keras/site/en/guide/keras/writing_a_training_loop_from_scratch.ipynb
-#     with tf.GradientTape() as g:
-#         g.watch(x)
-#         preds = model(x)
-#         loss = compute_loss(desired_labels, preds)
-
-#     # This has to be outside the with statement for efficiency, unless you want higher order derivatives.
-#     grads = g.gradient(loss, x)
-#     # Apply gradient using in-built tf optimizer
-#     optimizer.apply_gradients(zip([grads], [x]))
-
-#     return loss
-
-# Tf to Numpy when eager execution is disabled, which is the case for LRP.
-def tf_to_numpy(x: Tensor) -> TensorNumpy:
-    return np.array(tf.keras.backend.get_value(x))
+def to_numpy(x: torch.Tensor | np.ndarray) -> np.ndarray:
+    """
+    Converts a Torch Tensor to Numpy, handling CPU/GPU transitions.
+    Equivalent to tf_to_numpy.
+    """
+    if isinstance(x, np.ndarray):
+        return x
+    
+    # .detach() removes from graph, .cpu() moves to RAM, .numpy() converts
+    return x.detach().cpu().numpy()
