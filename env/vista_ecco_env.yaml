@@ -25,3 +25,5 @@ dependencies:
       - scipy
       - dask
       - netCDF4
+      - ipykernel
+
