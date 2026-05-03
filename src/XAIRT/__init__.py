@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from XAIRT.backend.graph import *
-from XAIRT.backend.metrics import *
-from XAIRT.model.Trainer import TrainLR, TrainFullyConnectedNN
-from XAIRT.model.XAI import XLR, XAIR
-from XAIRT.utils.stats import correlation
+from XAIRT.Trainer import *
+from XAIRT.XAI import *
+from XAIRT.utils import *
 
 __version__ = "1.0.0"
