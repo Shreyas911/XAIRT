@@ -11,6 +11,7 @@ from keras import backend as K
 
 from tf import Tensor
 from keras import Model
+import torch
 
 from beartype import beartype
 from jaxtyping import Float
@@ -18,7 +19,8 @@ from collections.abc import Callable
 
 __all__ = ["getLayerIndexByName",
            "Keras_GradientDescent_useGradientTape",
-           "tf_to_numpy", "metricF1", "correlation"]
+           "tf_to_numpy", "metricF1",
+           "correlation", "correlation_torch"]
 
 @beartype
 def getLayerIndexByName(model: Model, layername: str) -> int:
@@ -38,7 +40,7 @@ def Keras_GradientDescent_useGradientTape(model: Model,
         g.watch(x)
         preds = model(x)
         loss = compute_loss(desired_labels, preds)
-    
+
     # This has to be outside the with statement for efficiency, unless you want higher order derivatives.
     grads = g.gradient(loss, x)
 
@@ -74,13 +76,34 @@ def metricF1(y_true: Float[np.ndarray, "dimy dimx"],
     return 2*((precision*recall)/(precision+recall+K.epsilon()))
 
 @beartype
-def correlation(X: Float[np.ndarray, "dimy dimx"], 
+def correlation(X: Float[np.ndarray, "dimy dimx"],
                 y: Float[np.ndarray, "dimy"]) -> Float[np.ndarray, "dimx"]:
 
     correlations = np.zeros((X.shape[1],), dtype = float)
-    
+
     for i in range(X.shape[1]):
         correlations[i], _ = pearsonr(X[:,i], y)
 
     return correlations
+
+@beartype
+def correlation_torch(X: Float[torch.Tensor, "dimy dimx"],
+                      y: Float[torch.Tensor, "dimy"]) -> Float[torch.Tensor, "dimx"]:
+
+    # Standardize shapes
+    X = X.float()
+    y = y.float().view(-1, 1)
+
+    # Center the data
+    X_mean = torch.mean(X, dim=0)
+    y_mean = torch.mean(y)
+
+    X_centered = X - X_mean
+    y_centered = y - y_mean
+
+    # Compute correlation: (cov(X,y)) / (std(X) * std(y))
+    numerator = torch.mm(X_centered.t(), y_centered).squeeze()
+    denominator = torch.sqrt(torch.sum(X_centered**2, dim=0) * torch.sum(y_centered**2))
+
+    return numerator / (denominator + 1e-8)
 
