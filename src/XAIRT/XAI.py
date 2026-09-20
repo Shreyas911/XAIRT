@@ -1,27 +1,67 @@
 import numpy as np
 
-import warnings
-import sys
-import os
-import pathlib
-
-import tensorflow as tf
-import tensorflow.keras as keras
+import torch
+import torch.nn as nn
 import innvestigate
-import innvestigate.utils as iutils
 from innvestigate.analyzer.base import AnalyzerBase
-
-from XAIRT.utils import getLayerIndexByName 
+from captum.attr import IntegratedGradients, Saliency, DeepLift, InputXGradient, LRP
+from captum.attr._utils.lrp_rules import EpsilonRule, Alpha1_Beta0_Rule
 
 from sklearn.linear_model import LinearRegression
-from keras import Model
+from tensorflow.keras.models import Model
 from beartype import beartype
-from beartype.typing import Any, Dict, List, Optional, Tuple, Union
+from beartype.typing import Any, Dict, Optional, Tuple
 from jaxtyping import Float
 
-__all__ = ["XLR", "XAIKeras"]
+__all__ = ["XLR", "XAIKeras", "XAITorch"]
 
-class XLR:
+class _XAIBase:
+    """
+    Normalization and statistics shared by XLR, XAIKeras and XAITorch, so that
+    all three behave identically.
+
+    Normalization divides without guarding against zero, so a degenerate sample
+    (e.g. all-zero attributions) becomes NaN. This is deliberate: the nan-aware
+    numpy functions used everywhere here (nanmean, nansum, nanmax) then ignore it.
+    """
+
+    @staticmethod
+    @beartype
+    def _apply_normalize(a: Float[np.ndarray, "..."],
+                         normalize: Dict[str, Any]) -> Float[np.ndarray, "..."]:
+
+        if not normalize.get("bool_", False):
+            return a
+
+        kind = normalize.get("kind", "Sum")
+        if kind == "MaxAbs":
+            return a / np.nanmax(np.abs(a))
+        if kind == "Sum":
+            return a / np.nansum(a)
+
+        raise NotImplementedError("Only MaxAbs and Sum normalization currently available!")
+
+    @staticmethod
+    @beartype
+    def _count_allZeros(a: Float[np.ndarray, "dimy dimx"]) -> None:
+
+        numSamples = a.shape[0]
+        count_allZeros = sum(np.nansum(np.abs(a[i])) == 0 for i in range(numSamples))
+
+        print(f"Number of all-zero samples detected : {count_allZeros} i.e. {count_allZeros*100.0/numSamples} %")
+
+    @staticmethod
+    @beartype
+    def compute_statistics(a: Float[np.ndarray, "dimy dimx"]) -> Dict[str, Float[np.ndarray, "..."]]:
+
+        Stats = {}
+
+        # Mean heatmap over all samples
+        Stats["mean"] = np.nanmean(a, axis = 0)
+
+        return Stats
+
+class XLR(_XAIBase):
     """
     In an XAI context, only normalized samples makes sense for XLR
     Since all inputs should be of a similar scale to compare coeffs.
@@ -31,44 +71,30 @@ class XLR:
     def __init__(self,
                  model: LinearRegression,
                  samples: Float[np.ndarray, "dimy dimx"],
-                 normalize: Dict[str, Any] = {"bool_": True, "kind": "Sum"}
+                 normalize: Optional[Dict[str, Any]] = None
                  ) -> None:
 
         super().__init__()
         self.model = model
         self.samples = samples
-        self.normalize = normalize
+        self.normalize = {"bool_": True, "kind": "Sum"} if normalize is None else normalize
         self._coef = self.model.coef_
         self.fit_intercept = self.model.fit_intercept
 
     @beartype
     def _analyze_sample(self,
                         sample: Float[np.ndarray, "dimx"],
-                        normalize: Dict[str, Any] = {"bool_": True, "kind": "Sum"}
+                        normalize: Optional[Dict[str, Any]] = None
                         ) -> Float[np.ndarray, "dimx"]:
 
         a = self._coef * sample
 
-        if normalize["bool_"] is True and "kind" not in normalize:
-            normalize["kind"] = "Sum"
-        else:
-            pass
-
-        if normalize["bool_"] is True and normalize["kind"] == "MaxAbs":
-            a /= np.nanmax(np.abs(a))
-        elif normalize["bool_"] is True and normalize["kind"] == "Sum":
-            a /= np.nansum(a)
-        elif normalize["bool_"] is True and normalize["kind"] != "MaxAbs" and normalize["kind"] != "Sum":
-            raise NotImplementedError("Only MaxAbs and Sum normalization currently available!")
-        else:
-            pass
-
-        return a
+        return self._apply_normalize(a, self.normalize if normalize is None else normalize)
 
     @beartype
     def analyze_samples(self,
                         samples: Float[np.ndarray, "dimy dimx"],
-                        normalize: Dict[str, Any] = {"bool_": True, "kind": "Sum"}
+                        normalize: Optional[Dict[str, Any]] = None
                         ) -> Float[np.ndarray, "dimy dimx"]:
 
         a = np.zeros(samples.shape, dtype = np.float64)
@@ -87,26 +113,15 @@ class XLR:
 
         return a, statistics
 
-    @beartype
-    @staticmethod
-    def compute_statistics(a: Float[np.ndarray, "dimy dimx"]) -> Dict[str, Float[np.ndarray, "..."]]:
-        
-        Stats = {}
-
-        # Mean heatmap over all samples
-        Stats["mean"] = np.nanmean(a, axis = 0)
-
-        return Stats
-
-class XAIKeras:
+class XAIKeras(_XAIBase):
 
     @beartype
-    def __init__(self, 
+    def __init__(self,
                  model: Model,
                  method: Dict[str, Any],
                  kind: str,
                  samples: Float[np.ndarray, "dimy dimx"],
-                 normalize: Dict[str, Any] = {"bool_": True, "kind": "Sum"},
+                 normalize: Optional[Dict[str, Any]] = None,
                  **kwargs: Dict[str, Any]) -> None:
 
         super().__init__()
@@ -114,18 +129,17 @@ class XAIKeras:
         self.method = method
         self.kind = kind
         self.samples = samples
-        self.normalize = normalize
+        self.normalize = {"bool_": True, "kind": "Sum"} if normalize is None else normalize
         self.kwargs = kwargs
 
     @beartype
-    def _create_analyzer(self, 
+    def _create_analyzer(self,
                          method: Dict[str, Any],
                          kind: str,
-                         sample: Float[np.ndarray, "dimx"],
                          **kwargs: Dict[str, Any]) -> AnalyzerBase:
-        
+
         if kind == "classic":
-            Analyze = innvestigate.create_analyzer(method["name"], self.model, **method["optParams"])
+            Analyze = innvestigate.create_analyzer(method["name"], self.model, **method.get("optParams", {}))
         else:
             raise NotImplementedError("The only kinds of analyzers available are classic!")
 
@@ -136,53 +150,39 @@ class XAIKeras:
                         method: Dict[str, Any],
                         kind: str,
                         sample: Float[np.ndarray, "dimx"],
-                        normalize: Dict[str, Any] = {"bool_": True, "kind": "Sum"},
-                        Analyze: Optional[AnalyzerBase],
+                        normalize: Optional[Dict[str, Any]] = None,
+                        Analyze: Optional[AnalyzerBase] = None,
                         **kwargs: Dict[str, Any]
                         ) -> Float[np.ndarray, "dimx"]:
 
-        if kind =="classic" and Analyze is not None:
-            a = Analyze.analyze(sample[np.newaxis,:])
-        elif kind == "classic" and Analyze is None:
-            Analyze = self._create_analyzer(method, kind, sample, **kwargs)
-            a = Analyze.analyze(sample[np.newaxis,:])
-        else:
+        if kind != "classic":
             raise NotImplementedError("The only kinds of analyzers available are classic!")
 
-        if normalize["bool_"] is True and "kind" not in normalize:
-            normalize["kind"] = "Sum"
+        if Analyze is None:
+            Analyze = self._create_analyzer(method, kind, **kwargs)
 
-        if normalize["bool_"] is True and normalize["kind"] == "MaxAbs":
-            a /= np.nanmax(np.abs(a))
-        elif normalize["bool_"] is True and normalize["kind"] == "Sum":
-            a /= np.nansum(a)
-        elif normalize["bool_"] is True and normalize["kind"] != "MaxAbs" and normalize["kind"] != "Sum":
-            raise NotImplementedError("Only MaxAbs and Sum normalization currently available!")
-        else:
-            pass
+        # analyze() takes and returns a batch, here of one sample
+        a = Analyze.analyze(sample[np.newaxis,:])[0]
 
-        return a
+        return self._apply_normalize(a, self.normalize if normalize is None else normalize)
 
     @beartype
     def analyze_samples(self,
                         method: Dict[str, Any],
                         kind: str,
                         samples: Float[np.ndarray, "dimy dimx"],
-                        normalize: Dict[str, Any] = {"bool_": True, "kind": "Sum"},
-                        Analyze: Optional[AnalyzerBase],
+                        normalize: Optional[Dict[str, Any]] = None,
+                        Analyze: Optional[AnalyzerBase] = None,
                         **kwargs: Dict[str, Any]
                         ) -> Float[np.ndarray, "dimy dimx"]:
 
         a = np.zeros(samples.shape, dtype = np.float64)
         numSamples = samples.shape[0]
 
-        count_allZeros = 0
         for i in range(numSamples):
             a[i] = self._analyze_sample(method, kind, samples[i], normalize, Analyze, **kwargs)
-            if np.nansum(a[i]) == 0:
-                count_allZeros = count_allZeros + 1
 
-        print(f"Number of all-zero samples detected : {count_allZeros} i.e. {count_allZeros*100.0/numSamples} %")
+        self._count_allZeros(a)
 
         return a
 
@@ -195,32 +195,31 @@ class XAIKeras:
 
         return a, statistics
 
-    @beartype
-    @staticmethod
-    def compute_statistics(a: Float[np.ndarray, "dimy dimx"]) -> Dict[str, Float[np.ndarray, "..."]]:
+# innvestigate method name -> Captum attribution class. Method dicts are the same
+# for both backends: dict(name='lrp.z', optParams={}, title='LRP-Z').
+_CAPTUM_METHODS = {"gradient"            : Saliency,
+                   "input_t_gradient"    : InputXGradient,
+                   "integrated_gradients": IntegratedGradients,
+                   "deep_lift.wrapper"   : DeepLift}
 
-        Stats = {}
+_LRP_METHODS = ("lrp.z", "lrp.epsilon", "lrp.alpha_1_beta_0")
 
-        # Mean heatmap over all samples
-        Stats["mean"] = np.nanmean(a, axis = 0)
-
-        return Stats
-
-class XAITorch:
+class XAITorch(_XAIBase):
     """
-    Neural-network XAI using Captum as the attribution backend.
-    Mirrors the original Keras XAIR interface.
+    Same interface as XAIKeras, with Captum in place of innvestigate.
 
-    Parameters
-    ----------
-    model     : nn.Module  – trained PyTorch model (eval mode set automatically)
-    method    : dict       – {'name': str, 'optParams': dict}
-                             name: 'saliency' | 'integrated_gradients' |
-                                   'deeplift' | 'lrp'
-    kind      : str        – 'classic' | 'letzgus'
-    samples   : np.ndarray – shape (N, n_features)
-    normalize : dict       – {'bool_': bool, 'kind': 'Sum'|'MaxAbs'}
-    y_ref     : float      – reference output for Letzgus (passed as kwarg)
+    The method dict uses the innvestigate names, so one dict works for both backends:
+      'gradient', 'input_t_gradient', 'integrated_gradients', 'deep_lift.wrapper',
+      'lrp.z', 'lrp.epsilon' (optParams: epsilon), 'lrp.alpha_1_beta_0'.
+    Other names and optParams (e.g. input_layer_rule, bias, the '_IB' variants)
+    are innvestigate-specific and raise NotImplementedError.
+
+    Captum LRP does not support Softmax/Sigmoid layers, so for 'lrp.*' pass a model
+    without its final one (the equivalent of innvestigate.model_wo_softmax, see
+    model_wo_softmax_torch in XAIRT.utils).
+
+    The model is put in eval mode, its ReLUs are made non-inplace (Captum needs
+    that) and, for LRP, a `rule` is attached to its Linear layers.
     """
 
     @beartype
@@ -229,137 +228,139 @@ class XAITorch:
                  method: Dict[str, Any],
                  kind: str,
                  samples: Float[np.ndarray, "dimy dimx"],
-                 normalize: Dict[str, Any] = {'bool_': True, 'kind': 'Sum'},
+                 normalize: Optional[Dict[str, Any]] = None,
                  **kwargs: Dict[str, Any]) -> None:
 
         super().__init__()
-        self.model   = model
+        self.model = model
         for module in self.model.modules():
-            if isinstance(module, torch.nn.ReLU):
+            if isinstance(module, nn.ReLU):
                 module.inplace = False
         self.model.eval()
-        self.method  = method
-        self.kind    = kind
+        self.method = method
+        self.kind = kind
         self.samples = samples
-        self.normalize = normalize
-        self.kwargs  = kwargs
+        self.normalize = {"bool_": True, "kind": "Sum"} if normalize is None else normalize
+        self.kwargs = kwargs
 
     @beartype
-    def _get_analyzer(self, method_name: str) -> Any:
+    def _create_analyzer(self,
+                         method: Dict[str, Any],
+                         kind: str,
+                         **kwargs: Dict[str, Any]) -> Any:
 
-        """Maps method name string to a Captum attribution object."""
-        name = method_name.lower()
-        if name == 'saliency':            return Saliency(self.model)
-        if name == 'integrated_gradients': return IntegratedGradients(self.model)
-        if name == 'deeplift':            return DeepLift(self.model)
-        if name == 'lrp':                 return LRP(self.model)
+        if kind != "classic":
+            raise NotImplementedError("The only kinds of analyzers available are classic!")
 
-        raise NotImplementedError(
-            f"Method '{method_name}' is not mapped. "
-            "Available: saliency, integrated_gradients, deeplift, lrp."
-        )
+        name = method["name"]
+        optParams = dict(method.get("optParams", {}))
 
-    @beartype
-    def _apply_normalize(self, 
-                         a: np.ndarray, 
-                         normalize: Dict[str, Any] = {'bool_': True, 'kind': 'Sum'}) -> np.ndarray:
+        if name in _CAPTUM_METHODS:
+            Analyze = _CAPTUM_METHODS[name](self.model)
 
-        if normalize is None or not normalize.get('bool_', False):
-            return a
+        elif name in _LRP_METHODS:
+            if any(isinstance(m, (nn.Softmax, nn.Sigmoid)) for m in self.model.modules()):
+                raise ValueError("Captum LRP does not support Softmax/Sigmoid layers. "
+                                 "Pass the model without its final one, see model_wo_softmax_torch.")
 
-        kind = normalize.get('kind', 'Sum')
-        if kind == 'MaxAbs':
-            denom = np.nanmax(np.abs(a))
-            return a / denom if denom != 0 else a
-        if kind == 'Sum':
-            denom = np.nansum(a)
-            return a / denom if denom != 0 else a
+            # Set on every call, since rules stay attached to the model between analyzers
+            if name == "lrp.alpha_1_beta_0":
+                make_rule = Alpha1_Beta0_Rule
+            elif name == "lrp.epsilon":
+                epsilon = optParams.pop("epsilon", 1e-7)    # the innvestigate default
+                make_rule = lambda: EpsilonRule(epsilon = epsilon)
+            else:
+                make_rule = EpsilonRule     # lrp.z, the default epsilon is negligible
 
-        raise NotImplementedError(f"Normalization kind '{kind}' not supported.")
+            for module in self.model.modules():
+                if isinstance(module, nn.Linear):
+                    module.rule = make_rule()
+
+            Analyze = LRP(self.model)
+
+        else:
+            raise NotImplementedError(f"Method '{name}' is not mapped. Available: "
+                                      f"{list(_CAPTUM_METHODS) + list(_LRP_METHODS)}.")
+
+        if optParams:
+            raise NotImplementedError(f"optParams {list(optParams)} are not supported for '{name}' with Torch.")
+
+        return Analyze
 
     @beartype
     def _get_target_idx(self, sample_t: torch.Tensor) -> int:
         """
-        Returns the predicted class index for a single-sample tensor.
-        For scalar regression output, returns 0.
+        Predicted class index of a single-sample tensor, or 0 for a single output.
+        Same as innvestigate's default neuron_selection, the max activation neuron.
         """
+
         with torch.no_grad():
             output = self.model(sample_t)
+
         if output.shape[-1] == 1:
             return 0
+
         return int(torch.argmax(output, dim=1).item())
 
     @beartype
-    def _analyze_sample(self, 
-                        sample: np.ndarray,
-                        method: dict,
+    def _analyze_sample(self,
+                        method: Dict[str, Any],
                         kind: str,
-                        normalize: Dict[str, Any] = None,
-                        **kwargs) -> np.ndarray:
-        """
-        Attribute a single sample. Returns an array of the same shape.
-        """
-        # Fresh tensor with grad enabled for Captum
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model.to(device)
+                        sample: Float[np.ndarray, "dimx"],
+                        normalize: Optional[Dict[str, Any]] = None,
+                        Analyze: Optional[Any] = None,
+                        **kwargs: Dict[str, Any]
+                        ) -> Float[np.ndarray, "dimx"]:
+
+        if kind != "classic":
+            raise NotImplementedError("The only kinds of analyzers available are classic!")
+
+        if Analyze is None:
+            Analyze = self._create_analyzer(method, kind, **kwargs)
+
+        # Use the device the model is already on, as XAIKeras does not move anything
+        device = next(self.model.parameters()).device
         sample_t = torch.from_numpy(sample.copy()).float().to(device).unsqueeze(0)
         target_idx = self._get_target_idx(sample_t)
 
-        if kind == 'classic':
-            analyzer = self._get_analyzer(method['name'])
-            # Captum requires requires_grad=True on the input
-            inp = sample_t.detach().requires_grad_(True)
-            attr = analyzer.attribute(inp, target=target_idx)
-            a = attr.detach().cpu().numpy().flatten()
+        # Captum requires requires_grad=True on the input
+        inp = sample_t.detach().requires_grad_(True)
 
+        if isinstance(Analyze, Saliency):
+            # Captum returns absolute values by default, innvestigate's gradient does not
+            attr = Analyze.attribute(inp, target=target_idx, abs=False)
         else:
-            raise NotImplementedError(
-                f"kind='{kind}' is not supported. Use 'classic' or 'letzgus'."
-            )
+            attr = Analyze.attribute(inp, target=target_idx)
 
-        norm = normalize if normalize is not None else self.normalize
-        a = self._apply_normalize(a, norm)
-        return a.reshape(sample.shape)
+        a = attr.detach().cpu().numpy()[0]
+
+        return self._apply_normalize(a, self.normalize if normalize is None else normalize)
 
     @beartype
-    def analyze_samples(self, samples: np.ndarray = None,
-                        method: dict = None,
-                        kind: str = None,
-                        normalize: Dict[str, Any] = None,
-                        **kwargs) -> np.ndarray:
-        """
-        Attribute all samples. Returns array of same shape as samples.
-        Counts and reports all-zero attribution vectors (sign of a bug).
-        """
-        S   = samples if samples is not None else self.samples
-        m   = method  if method  is not None else self.method
-        k   = kind    if kind    is not None else self.kind
-        nrm = normalize if normalize is not None else self.normalize
+    def analyze_samples(self,
+                        method: Dict[str, Any],
+                        kind: str,
+                        samples: Float[np.ndarray, "dimy dimx"],
+                        normalize: Optional[Dict[str, Any]] = None,
+                        Analyze: Optional[Any] = None,
+                        **kwargs: Dict[str, Any]
+                        ) -> Float[np.ndarray, "dimy dimx"]:
 
-        a = np.zeros(S.shape, dtype=np.float64)
-        n_zero = 0
-        for i in range(len(S)):
-            a[i] = self._analyze_sample(S[i], m, k, nrm, **kwargs)
-            if np.nansum(np.abs(a[i])) == 0:
-                n_zero += 1
+        a = np.zeros(samples.shape, dtype = np.float64)
+        numSamples = samples.shape[0]
 
-        print(f"All-zero attribution vectors: {n_zero} / {len(S)} "
-              f"({100.0 * n_zero / len(S):.1f}%)")
+        for i in range(numSamples):
+            a[i] = self._analyze_sample(method, kind, samples[i], normalize, Analyze, **kwargs)
+
+        self._count_allZeros(a)
+
         return a
 
     @beartype
-    def quick_analyze(self) -> Tuple:
-        """Full pipeline: attribute self.samples, return (attributions, stats)."""
-        missing = [name for name, val in [
-            ('model',   self.model),
-            ('method',  self.method),
-            ('kind',    self.kind),
-            ('samples', self.samples),
-        ] if val is None]
-        if missing:
-            raise ValueError(
-                f"Cannot run quick_analyze(): {missing} are not set."
-            )
-        a = self.analyze_samples()
-        return a, self.compute_statistics(a)
+    def quick_analyze(self) -> Tuple[Float[np.ndarray, "dimy dimx"], Dict[str, Float[np.ndarray, "..."]]]:
 
+        Analyze = self._create_analyzer(self.method, self.kind, **self.kwargs)
+        a = self.analyze_samples(self.method, self.kind, self.samples, self.normalize, Analyze, **self.kwargs)
+        statistics = self.compute_statistics(a)
+
+        return a, statistics

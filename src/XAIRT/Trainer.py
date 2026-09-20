@@ -1,21 +1,23 @@
 import os
-import tensorflow as tf
+import math
+import numpy as np
 import tensorflow.keras as keras
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 
 from tensorflow.keras import initializers
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, Dropout, Input
+from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.callbacks import ModelCheckpoint, LearningRateScheduler
-from keras.regularizers import L1L2
+from tensorflow.keras.regularizers import L1L2
 
-from sklearn.utils import shuffle
 from sklearn.linear_model import LinearRegression
 
-from tf import Tensor
-from keras import Model
-
 from beartype import beartype
-from beartype.typing import Any, Dict, List, Optional, Tuple, Union
+from beartype.typing import Any, Dict, Optional, Tuple, Union
 from jaxtyping import Float
 from collections.abc import Callable
 
@@ -40,10 +42,9 @@ class TrainLR:
         self.y = y
         self.fit_intercept = fit_intercept
         self.y_ref = y_ref
-        self._model_state = []
 
     @beartype
-    def train(self) -> LinearRegression:
+    def quickTrain(self) -> LinearRegression:
 
         self.regr = LinearRegression(fit_intercept = self.fit_intercept)
         self.regr.fit(self.x, self.y-self.y_ref)
@@ -54,11 +55,11 @@ class TrainKerasFullyConnectedNN:
     @beartype
     def __init__(self,
                  x: Float[np.ndarray, "dimy dimx"],
-                 y: Float[np.ndarray, "dimy"],
+                 y: Float[np.ndarray, "dimy ..."],
                  layers: list[Dict[str, Any]],
                  losses: list[Dict[str, Any]],
                  optimizer: keras.optimizers.Optimizer,
-                 metrics: list[str],
+                 metrics: list[Union[str, Callable]],
                  batch_size: int,
                  epochs: int,
                  filename: str,
@@ -115,7 +116,8 @@ class TrainKerasFullyConnectedNN:
 
         _sizes = [layer["size"] for layer in self.layers]
         _activations = [layer["activation"] for layer in self.layers]
-        _use_biases = [layer["use_bias"] if "use_bias" in layer else None for layer in self.layers]
+        # A missing (or None) use_bias means a bias, as in the Torch class
+        _use_biases = [True if layer.get("use_bias") is None else layer["use_bias"] for layer in self.layers]
         _l1_w_regs = [layer["l1_w_reg"] if "l1_w_reg" in layer else 0.0 for layer in self.layers]
         _l1_b_regs = [layer["l1_b_reg"] if "l1_b_reg" in layer else 0.0 for layer in self.layers]
         _l2_w_regs = [layer["l2_w_reg"] if "l2_w_reg" in layer else 0.0 for layer in self.layers]
@@ -125,14 +127,19 @@ class TrainKerasFullyConnectedNN:
 
         if _activations[0] is not None:
             raise ValueError("Input layer cannot have an activation")
-        if _use_biases[0] is not None:
+        if self.layers[0].get("use_bias") is not None:
             raise ValueError("Input layer cannot have a bias.")
 
+        # Per-layer seeds, so layers of the same shape are not initialized identically.
+        # Biases start at zero, as in the Torch class.
+        def _seed(i):
+            return None if self.random_nn_seed is None else self.random_nn_seed + i
+
         inputs = Input(shape=(_sizes[0],))
-        dense = Dense(_sizes[1], 
+        dense = Dense(_sizes[1],
                       activation=_activations[1], use_bias = _use_biases[1],
-                      kernel_initializer=initializers.HeNormal(seed=self.random_nn_seed),
-                      bias_initializer=initializers.HeNormal(seed=self.random_nn_seed),
+                      kernel_initializer=initializers.HeNormal(seed=_seed(1)),
+                      bias_initializer=initializers.Zeros(),
                       kernel_regularizer=L1L2(l1 =_l1_w_regs[1], l2 = _l2_w_regs[1]),
                       bias_regularizer=L1L2(l1 = _l1_b_regs[1], l2 = _l2_b_regs[1]),
                       kernel_constraint=_kernel_constraints[1],
@@ -143,8 +150,8 @@ class TrainKerasFullyConnectedNN:
 
             dense = Dense(_sizes[i], 
                           activation=_activations[i], use_bias = _use_biases[i],
-                          kernel_initializer=initializers.HeNormal(seed=self.random_nn_seed),
-                          bias_initializer=initializers.HeNormal(seed=self.random_nn_seed),
+                          kernel_initializer=initializers.HeNormal(seed=_seed(i)),
+                          bias_initializer=initializers.Zeros(),
                           kernel_regularizer=L1L2(l1 =_l1_w_regs[i], l2 = _l2_w_regs[i]),
                           bias_regularizer=L1L2(l1 = _l1_b_regs[i], l2 = _l2_b_regs[i]),
                           kernel_constraint=_kernel_constraints[i],
@@ -202,17 +209,15 @@ class TrainKerasFullyConnectedNN:
     @beartype
     def loadBestModel(self) -> Model:
 
-        if self._model_state[-1] != "trained":
-            raise Exception("Model is not trained!")
-
         best_model = keras.models.load_model(self.mod_h5, custom_objects=self.custom_objects)
 
         return best_model
 
     @beartype
-    def train(self, decay_func: Optional[Callable] = None) -> Model:
+    def quickTrain(self, decay_func: Optional[Callable] = None) -> Model:
 
-        self._model_state = []
+        # Otherwise repeated calls stack up duplicate checkpoints and schedulers
+        self.callbacks = []
 
         self._createModel()
         self._compileModel()
@@ -225,12 +230,17 @@ class TrainKerasFullyConnectedNN:
 
         return self.loadBestModel()
 
+def _softmax_crossentropy(p: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """Keras categorical_crossentropy on softmax outputs, one loss per sample:
+    the probabilities are clipped to [eps, 1-eps] and the loss is -sum(y * log(p))."""
+    return -(y * torch.log(torch.clamp(p, 1e-7, 1 - 1e-7))).sum(dim=1)
+
 class TrainTorchFullyConnectedNN:
 
     @beartype
     def __init__(self,
-                 x: Float[torch.Tensor, "dimy dimx"],
-                 y: Float[torch.Tensor, "dimy"],
+                 x: Float[np.ndarray, "dimy dimx"],
+                 y: Float[np.ndarray, "dimy ..."],
                  layers: list[Dict[str, Any]],
                  losses: list[Dict[str, Any]],
                  optimizer: str,
@@ -245,24 +255,30 @@ class TrainTorchFullyConnectedNN:
                  class_weight: Optional[Dict[int, float]] = None,
                  random_nn_seed: Optional[int] = None,
                  decay_rate: Optional[float] = None,
+                 learning_rate: Optional[float] = None,
                  **kwargs: Dict[str, Any]) -> None:
 
         super().__init__()
 
         @beartype
-        def _to_tensor(arr: Float[np.ndarray, ...]) -> Float[torch.Tensor, ...]:
-            """Convert numpy → contiguous float32 tensor, or ensure float32."""
-            if isinstance(arr, np.ndarray):
-                # .copy() ensures C-contiguous layout; required by from_numpy
-                return torch.from_numpy(arr.copy()).float()
-            return arr.float() if arr.dtype != torch.float32 else arr
+        def _to_tensor(arr: Float[np.ndarray, "..."]) -> Float[torch.Tensor, "..."]:
+            """Convert numpy → contiguous float32 tensor."""
+            # .copy() ensures C-contiguous layout; required by from_numpy
+            return torch.from_numpy(arr.copy()).float()
+
+        def _to_target(arr):
+            """A 1-D y is (N,) but the network outputs (N, 1), and MSELoss would silently
+            broadcast (N, 1) against (N,) to (N, N). A (N, C) one-hot y is kept as it is."""
+            t = _to_tensor(arr)
+            return t.unsqueeze(-1) if t.ndim == 1 else t
 
         self.x = _to_tensor(x)
-        self.y = _to_tensor(y)
+        self.y = _to_target(y)
 
         self.layers_cfg = layers
         self.losses_cfg = losses
         self.opt_name   = optimizer.lower()
+        self.learning_rate = learning_rate
         self.decay_rate = decay_rate
         self.metrics    = metrics
         self.verbose    = verbose
@@ -271,10 +287,8 @@ class TrainTorchFullyConnectedNN:
         self.dirname    = dirname
         self.filename   = filename
 
-        # Seed before _createModel so weight init is reproducible
+        # Seeded in quickTrain so every run is reproducible, not just the first
         self.random_nn_seed = random_nn_seed
-        if self.random_nn_seed is not None:
-            torch.manual_seed(self.random_nn_seed)
 
         # decay_func: callable (epoch -> lr), set via quickTrain().
         # Direct param_group assignment mirrors Keras LearningRateScheduler
@@ -283,15 +297,24 @@ class TrainTorchFullyConnectedNN:
         self.decay_func = None
 
         # class_weight: dict {class_idx: float}
-        self.class_weight = kwargs.get('class_weight', None)
+        self.class_weight = class_weight
 
+        # As in Keras, validation_data takes precedence over validation_split, and
+        # the split holds out the LAST fraction of the samples (before shuffling).
+        self.validation_split = validation_split
         if validation_data is not None:
             vx, vy = validation_data
-            self.validation_data = (_to_tensor(vx), _to_tensor(vy))
+            self.validation_data = (_to_tensor(vx), _to_target(vy))
+        elif validation_split is not None:
+            if not 0.0 < validation_split < 1.0:
+                raise ValueError("validation_split must be between 0 and 1.")
+            split_at = int(self.x.shape[0] * (1.0 - validation_split))
+            self.validation_data = (self.x[split_at:], self.y[split_at:])
+            self.x, self.y = self.x[:split_at], self.y[:split_at]
         else:
             self.validation_data = None
 
-        self.mod_path      = os.path.join(self.dirname, self.filename + '.pt')
+        self.mod_path     = os.path.join(self.dirname, self.filename + '.pt')
         os.makedirs(self.dirname, exist_ok=True)
 
         self.best_val_loss = float('inf')
@@ -300,22 +323,25 @@ class TrainTorchFullyConnectedNN:
         self.model_metadata = {"layers"     : self.layers_cfg,
                                "losses"     : self.losses_cfg,
                                "optimizer"  : self.opt_name,
+                               "learning_rate" : self.learning_rate,
                                "decay_rate" : self.decay_rate,
                                "metrics"    : self.metrics}
         self.train_metadata = {"batch_size"      : self.batch_size,
                                "epochs"          : self.epochs,
+                               "validation_split" : self.validation_split,
                                "validation_data" : self.validation_data,
                                "filename"        : self.filename, 
                                "dirname"         : self.dirname}
 
-    @beartype
     @staticmethod
+    @beartype
     def _get_activation(name) -> Optional[Callable[[torch.Tensor], torch.Tensor]]:
 
         if name is None:
             return None
 
         name = name.lower()
+        if name == 'linear':      return None
         if name == 'relu':        return nn.ReLU()
         if name == 'sigmoid':     return nn.Sigmoid()
         if name == 'tanh':        return nn.Tanh()
@@ -324,8 +350,8 @@ class TrainTorchFullyConnectedNN:
 
         raise NotImplementedError(f"Activation '{name}' is not supported.")
 
-    @beartype
     @staticmethod
+    @beartype
     def _safe_use_bias(layer_cfg: Dict[str, Any]) -> bool:
 
         val = layer_cfg.get('use_bias', True)
@@ -342,8 +368,11 @@ class TrainTorchFullyConnectedNN:
             use_bias = self._safe_use_bias(cfg)
 
             linear = nn.Linear(in_dim, out_dim, bias=use_bias)
-            # Kaiming-Normal init matches Keras HeNormal initializer
-            nn.init.kaiming_normal_(linear.weight, nonlinearity='relu')
+            # Same distribution as Keras HeNormal: truncated normal at +-2 std,
+            # with std = sqrt(2 / fan_in) / .87962566103423978 (the constant
+            # corrects for the truncation, as in Keras VarianceScaling)
+            std = math.sqrt(2.0 / in_dim) / .87962566103423978
+            nn.init.trunc_normal_(linear.weight, mean=0.0, std=std, a=-2*std, b=2*std)
             if use_bias:
                 nn.init.zeros_(linear.bias)
             modules.append(linear)
@@ -365,9 +394,20 @@ class TrainTorchFullyConnectedNN:
         last_act = self.layers_cfg[-1].get('activation', None)
         has_softmax = (last_act is not None and last_act.lower() == 'softmax')
 
+        # Keras name, so the same loss dict works for both backends
+        if kind == 'binary_crossentropy':
+            kind = 'bce'
+
+        # With one output, the cross-entropy path takes argmax over a single
+        # column (always class 0) and gives a constant zero loss: it never trains.
+        if kind in ('crossentropy', 'categorical_crossentropy') \
+                and self.layers_cfg[-1]['size'] == 1:
+            raise ValueError(f"Loss '{kind}' needs at least 2 outputs. For a "
+                             "single-output binary model use 'binary_crossentropy'.")
+
         # reduction='none' so we can apply per-sample class weights before .mean()
         if kind in ('crossentropy', 'categorical_crossentropy'):
-            crit = nn.BCELoss(reduction='none') if has_softmax \
+            crit = _softmax_crossentropy if has_softmax \
                    else nn.CrossEntropyLoss(reduction='none')
         elif kind == 'mse':
             crit = nn.MSELoss(reduction='none')
@@ -386,16 +426,47 @@ class TrainTorchFullyConnectedNN:
     def _build_optimizer(self) -> optim.Optimizer:
 
         params = self.model.parameters()
+        # Keras-equivalent settings. Matching Keras calls:
+        #   Adam: keras.optimizers.Adam(learning_rate=lr)    (eps=1e-7 is the Keras default)
+        #   SGD : keras.optimizers.SGD(learning_rate=lr, momentum=0.9, nesterov=True)
+        lr = self.learning_rate
         if self.opt_name == 'adam':
-            return optim.Adam(params, lr=1e-3)
+            return optim.Adam(params, lr=1e-3 if lr is None else lr,
+                              betas=(0.9, 0.999), eps=1e-7)
         if self.opt_name == 'sgd':
-            # nesterov=True matches keras.optimizers.SGD(nesterov=True)
-            return optim.SGD(params, lr=1e-2, momentum=0.9, nesterov=True)
+            return optim.SGD(params, lr=1e-2 if lr is None else lr,
+                             momentum=0.9, nesterov=True)
         raise NotImplementedError(f"Optimizer '{self.opt_name}' not supported.")
+
+    @staticmethod
+    @beartype
+    def _constraint_name(constraint) -> Optional[str]:
+        """Normalize a Keras constraint (object or string) to a known name."""
+
+        if constraint is None:
+            return None
+
+        name = constraint if isinstance(constraint, str) else type(constraint).__name__
+        name = name.lower().replace('_', '')
+        if name == 'nonneg':
+            return 'nonneg'
+
+        raise NotImplementedError(f"Constraint '{name}' is not supported.")
+
+    @beartype
+    def _build_constraints(self) -> list:
+        """(Linear layer, kernel constraint, bias constraint) for each layer."""
+
+        linears = [m for m in self.model if isinstance(m, nn.Linear)]
+        return [(layer,
+                 self._constraint_name(cfg.get('kernel_constraint')),
+                 self._constraint_name(cfg.get('bias_constraint')))
+                for layer, cfg in zip(linears, self.layers_cfg[1:])]
 
     @beartype
     def _compileModel(self) -> None:
         self._build_criterion()   # raises on bad config
+        self._build_constraints() # raises on unsupported constraints
 
     @beartype
     def _createCheckpoint(self) -> None:
@@ -403,7 +474,31 @@ class TrainTorchFullyConnectedNN:
 
     @beartype
     def _createModel(self) -> None:
+
+        if self.layers_cfg[0].get("activation") is not None:
+            raise ValueError("Input layer cannot have an activation")
+        if self.layers_cfg[0].get("use_bias") is not None:
+            raise ValueError("Input layer cannot have a bias.")
+
         self.model = nn.Sequential(*self._build_model_modules())
+
+    @beartype
+    def _regularization(self) -> torch.Tensor:
+        """Keras L1L2 penalty, l1 * sum(|w|) + l2 * sum(w^2), for the kernels and the biases."""
+
+        linears = [m for m in self.model if isinstance(m, nn.Linear)]
+        reg = torch.zeros((), device=linears[0].weight.device)
+
+        for layer, cfg in zip(linears, self.layers_cfg[1:]):
+            l1_w, l2_w = cfg.get('l1_w_reg', 0.0) or 0.0, cfg.get('l2_w_reg', 0.0) or 0.0
+            l1_b, l2_b = cfg.get('l1_b_reg', 0.0) or 0.0, cfg.get('l2_b_reg', 0.0) or 0.0
+            if l1_w: reg = reg + l1_w * layer.weight.abs().sum()
+            if l2_w: reg = reg + l2_w * (layer.weight ** 2).sum()
+            if layer.bias is not None:
+                if l1_b: reg = reg + l1_b * layer.bias.abs().sum()
+                if l2_b: reg = reg + l2_b * (layer.bias ** 2).sum()
+
+        return reg
 
     @beartype
     def _trainModel(self) -> None:
@@ -418,11 +513,13 @@ class TrainTorchFullyConnectedNN:
         # 2. Setup Logic
         crit, loss_kind, has_softmax = self._build_criterion()
         optimizer = self._build_optimizer()
+        constraints = self._build_constraints()
 
         # Handle Class Weights
         cw_tensor = None
         if self.class_weight is not None:
-            n_cls = self.layers_cfg[-1]['size']
+            # A single sigmoid output is binary, i.e. classes 0 and 1
+            n_cls = max(self.layers_cfg[-1]['size'], 2)
             cw_tensor = torch.tensor(
                 [self.class_weight.get(i, 1.0) for i in range(n_cls)],
                 dtype=torch.float32
@@ -453,28 +550,31 @@ class TrainTorchFullyConnectedNN:
                 else:
                     raw_loss = crit(outputs, batch_y)
                     if cw_tensor is not None:
-                        raw_loss = raw_loss * cw_tensor.unsqueeze(0)
+                        if raw_loss.dim() == 1:
+                            # Softmax cross-entropy: one loss per sample, weighted by its class, as in Keras
+                            raw_loss = raw_loss * cw_tensor[batch_y.argmax(dim=1)]
+                        elif outputs.shape[1] == 1:
+                            # Binary: weight each sample by its label's class weight
+                            raw_loss = raw_loss * cw_tensor[batch_y.long().squeeze(1)].unsqueeze(1)
+                        else:
+                            raw_loss = raw_loss * cw_tensor.unsqueeze(0)
                     loss = raw_loss.mean()
 
-                # 5. Regularization (Matches Keras L1L2 exactly)
-                reg = torch.zeros(1, device=device)
-                lin_idx = 1
-                for layer in self.model:
-                    if isinstance(layer, nn.Linear):
-                        if lin_idx < len(self.layers_cfg):
-                            cfg = self.layers_cfg[lin_idx]
-                            l1, l2 = cfg.get('l1_w_reg', 0.0) or 0.0, cfg.get('l2_w_reg', 0.0) or 0.0
-                            l1_b, l2_b = cfg.get('l1_b_reg', 0.0) or 0.0, cfg.get('l2_b_reg', 0.0) or 0.0
-                            if l1: reg += l1 * layer.weight.abs().sum()
-                            if l2: reg += 0.5 * l2 * (layer.weight ** 2).sum()
-                            if l1_b and layer.bias is not None: reg += l1_b * layer.bias.abs().sum()
-                            if l2_b and layer.bias is not None: reg += 0.5 * l2_b * (layer.bias ** 2).sum()
-                        lin_idx += 1
+                # 5. Regularization (Keras L1L2)
+                reg = self._regularization()
 
-                total_loss = loss + reg.squeeze()
+                total_loss = loss + reg
                 total_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 optimizer.step()
+
+                # Keras applies constraints after every weight update
+                with torch.no_grad():
+                    for layer, k_con, b_con in constraints:
+                        if k_con == 'nonneg':
+                            layer.weight.clamp_(min=0.0)
+                        if b_con == 'nonneg' and layer.bias is not None:
+                            layer.bias.clamp_(min=0.0)
+
                 running_loss += total_loss.item()
 
             # 6. Validation and Checkpointing
@@ -489,12 +589,20 @@ class TrainTorchFullyConnectedNN:
                         monitor_loss = crit(val_out, vt).mean().item()
                     else:
                         monitor_loss = crit(val_out, val_y).mean().item()
+                    # Keras' val_loss includes the regularization losses
+                    monitor_loss += self._regularization().item()
             else:
                 monitor_loss = epoch_loss
+
+            # Same keys as the Keras History
+            self.history["loss"].append(epoch_loss)
+            if self.validation_data is not None:
+                self.history["val_loss"].append(monitor_loss)
 
             if monitor_loss < self.best_val_loss:
                 self.best_val_loss = monitor_loss
                 torch.save(self.model.state_dict(), self.mod_path)
+                self._saved = True
 
             if self.verbose and epoch % 10 == 0:
                 print(f"Epoch {epoch:4d} | train loss: {epoch_loss:.6f} | val loss: {monitor_loss:.6f}")
@@ -523,11 +631,20 @@ class TrainTorchFullyConnectedNN:
 
         self.best_val_loss = float('inf')
         self.decay_func    = decay_func
+        self.history       = {"loss": [], "val_loss": []}
+        self._saved        = False
+
+        # Seed right before weight init and the DataLoader shuffling
+        if self.random_nn_seed is not None:
+            torch.manual_seed(self.random_nn_seed)
 
         self._createModel()
         self._compileModel()
         self._createCheckpoint()
         self._trainModel()
 
-        return self.loadBestModel()
+        # Otherwise loadBestModel would fail or silently load an old checkpoint
+        if not self._saved:
+            raise RuntimeError("No checkpoint saved: the loss never improved (NaN?).")
 
+        return self.loadBestModel()

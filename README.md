@@ -10,7 +10,20 @@ Here we pursue this comparison. By considering a simple case of estimating SST v
 
 # Dependencies
 
-The Python dependencies needed to run the code can be installed using the conda environment YAML file [env/py310_LRP.yaml](env/py310_LRP.yaml). 
+The Python dependencies needed to run the code, for both the Keras (`innvestigate`) and PyTorch (`captum`) backends, can be installed using the conda environment YAML file [env/XAIRT.yaml](env/XAIRT.yaml):
+
+```
+mamba env create -f env/XAIRT.yaml
+conda activate XAIRT
+```
+
+On a machine without a GPU, conda-forge's GPU builds of TensorFlow need a CUDA driver to be faked:
+
+```
+CONDA_OVERRIDE_CUDA=11.2 mamba env create -f env/XAIRT.yaml
+```
+
+The environment is for x86_64 Linux (for example Lonestar6). It pins TensorFlow 2.9.1 because `innvestigate` needs `tensorflow<2.15` and Python 3.10 is the last version TF 2.9.1 supports. TF 2.9.1 has no ARM wheel, so this file does not work on ARM machines such as Vista. The reasons for each pin are in the comments at the top of the YAML file.
 
 # Code Structure
 
