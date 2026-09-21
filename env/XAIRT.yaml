@@ -10,7 +10,13 @@
 #   * python 3.10 + tensorflow 2.9.1 : innvestigate 2.1.2 needs python <3.12 and
 #     tensorflow >=2.6,<2.15, and newer TF ships Keras 3, which breaks tensorflow.keras.
 #   * TF's CUDA 11 libraries (cudatoolkit, cudnn, nccl) come from conda. Torch comes from pip,
-#     whose wheels bundle their own CUDA 12 libraries, so the two do not clash.
+#     whose wheels bundle their own CUDA 12 libraries. Nearly all of those have different names from
+#     the conda ones and do not clash. NCCL is the exception: both are libnccl.so.2, and the first one
+#     loaded wins. TensorFlow loads first (XAIRT and most scripts import it first), so torch gets the
+#     conda NCCL, and a torch whose NCCL is newer fails to import with "undefined symbol: ncclCommResume".
+#     The unpinned torch of 2.14+cu130 did that (NCCL 2.30, conda has 2.27.3). torch 2.8.0 needs exactly
+#     nvidia-nccl-cu12==2.27.3, the conda version, and is a CUDA 12.8 build, whose driver requirement is
+#     lower than that of CUDA 13. If the conda nccl changes, check that torch 2.8.0 still matches it.
 #   * numpy, protobuf and keras are not pinned: the conda-forge TF build constrains them (numpy <2,
 #     keras 2.9, libprotobuf 3.20). Do not add protobuf <3.20, it conflicts with that libprotobuf.
 #     The old env broke because pip later replaced numpy, protobuf and keras with numpy 2, protobuf 7
@@ -19,8 +25,8 @@
 # TF 2.9.1 has no ARM wheel, so this file does not work on Vista (aarch64). That would need
 # tensorflow 2.10 to 2.14 instead.
 #
-# torch and captum are not pinned yet. Once the environment builds and the results look right,
-# record the versions (pip freeze | grep -i -E "torch|captum") and pin them here.
+# captum is not pinned yet (0.9.0 was installed). Once the results look right, record the versions
+# (pip freeze | grep -i -E "torch|captum") and pin it here.
 
 name: XAIRT
 channels:
@@ -63,5 +69,5 @@ dependencies:
 
   - pip:
       - innvestigate==2.1.2
-      - torch
+      - torch==2.8.0    # see the NCCL note above
       - captum

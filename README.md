@@ -25,7 +25,7 @@ CONDA_OVERRIDE_CUDA=11.2 mamba env create -f env/XAIRT.yaml
 
 Building the environment on a login node of Lonestar6 can fail with `std::bad_alloc`, since the login nodes cap the virtual memory of a process. [env/create_env.slurm](env/create_env.slurm) builds it on a GPU node instead (`sbatch env/create_env.slurm`, from the repository root), and prints the versions of the key packages and whether TensorFlow and PyTorch see the GPU when it is done.
 
-The environment is for x86_64 Linux (for example Lonestar6). It pins TensorFlow 2.9.1 because `innvestigate` needs `tensorflow<2.15` and Python 3.10 is the last version TF 2.9.1 supports. TF 2.9.1 has no ARM wheel, so this file does not work on ARM machines such as Vista. The reasons for each pin are in the comments at the top of the YAML file.
+The environment is for x86_64 Linux (for example Lonestar6). It pins TensorFlow 2.9.1 because `innvestigate` needs `tensorflow<2.15` and Python 3.10 is the last version TF 2.9.1 supports. It also pins torch 2.8.0, since the NCCL that the pip torch bundles has to be the conda one (both are `libnccl.so.2`, and the first one loaded wins), otherwise `import torch` after TensorFlow fails with `undefined symbol: ncclCommResume`. TF 2.9.1 has no ARM wheel, so this file does not work on ARM machines such as Vista. The reasons for each pin are in the comments at the top of the YAML file.
 
 # Code structure
 

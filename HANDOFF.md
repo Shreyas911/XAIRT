@@ -12,9 +12,34 @@ import the stack when they were written, so they were checked only by compiling 
 first round of small runtime errors (type checks with `beartype`/`jaxtyping`, argument mismatches, dtype issues) when they meet the
 real libraries.
 
+## Update at the end of the session: the environment works
+
+`pip install torch==2.8.0` was run in the existing `XAIRT` env (the fix of the NCCL clash described in step 1 below), and it is done. Checked on the login node:
+`import tensorflow, torch` and `import XAIRT` work, torch is `2.8.0+cu128`, and numpy 1.26.4 / protobuf 3.20.3 / keras 2.9.0 / TensorFlow 2.9.1 / captum 0.9.0 / innvestigate 2.1.2
+are unchanged. The A100 nodes have driver 570.195.03, which supports CUDA 12.8 (not 13). **Not checked yet:** `torch.cuda.is_available()` and the TensorFlow GPUs on a GPU node
+(run `sbatch env/create_env.slurm`, which now only checks an existing env).
+
+Scripts run so far (first real runs, small settings, output in the scratchpad, not kept), all on the login node, where TensorFlow needs
+`OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 TF_NUM_INTEROP_THREADS=1 TF_NUM_INTRAOP_THREADS=1 TF_NUM_THREADS=1 CUDA_VISIBLE_DEVICES=` or it dies with
+"Thread ... creation via pthread_create() failed" (the login node limits threads and memory; a compute node does not need this):
+- `LRP_manual_MWE_keras.py --epochs 2 --n-samples 500`: runs. innvestigate agrees with the hand computation wherever it should: WSquare and Bounded (-1,1) match to 1e-7, `lrp.alpha_1_beta_0` equals
+  the "one bias in the denominator, none in the numerator" variant with the residual `R_last - sum(a)` equal to the bias (0.144), `_IB` equals the "without bias" variant with residual 0.
+  This is issue #327 reproduced, and confirms the reading of `BoundedRule` and `AlphaBetaRule`.
+- `LRP_manual_MWE_torch.py --epochs 2 --n-samples 500`: runs, and Captum's A1B0, Z and epsilon match the hand computation. But the predicted class had bias 0 (NonNeg bias), so it says nothing yet about how Captum treats the bias.
+- `fake_data_LRP_A1B0_compare.py --positive-inputs --epochs 20 --n-samples 1500 --n-explain 30`: runs (with the `XAITorch` fix and the IB mapping). Keras vs Keras-network-in-Torch: Pearson and cosine **1.0000** for both A1B0 and
+  A1B0-IB, prediction difference 3.6e-07. As predicted for non-negative inputs. `keras` vs `torch` is about 0.66, which is expected since those are two separately trained networks.
+  **One small run, one seed.** Still to do: the same without `--positive-inputs` (the hypothesis says the first layer should then differ), and the `XAITorch` regression test below.
+
 ## First things to do, in order
 
-1. **Build the environment.** `sbatch env/create_env.slurm` (from the repo root) on a GPU node. The login node cannot do it: it caps the
+1. **Build and check the environment.** `sbatch env/create_env.slurm` (from the repo root) on a GPU node; if the env exists it only checks it.
+   **Status when this was written:** the env was built once (job 3458672: numpy 1.26.4, protobuf 3.20.3, keras 2.9.0, TensorFlow 2.9.1, captum 0.9.0,
+   innvestigate 2.1.2 by pip; `innvestigate.__version__` printed 2.0.1, probably a stale string, check with `pip show`), but **`import torch` after `import tensorflow`
+   failed** with `undefined symbol: ncclCommResume`, so `import XAIRT` and every script failed. Cause: the unpinned pip torch was 2.14+cu130, which bundles NCCL 2.30,
+   while conda has NCCL 2.27.3, and both are `libnccl.so.2`, so torch gets the conda one when TensorFlow loads first. Torch first works, TensorFlow first does not (reproduced on the
+   login node with `OPENBLAS_NUM_THREADS=1`). The YAML now pins `torch==2.8.0`, which needs exactly NCCL 2.27.3 and is a CUDA 12.8 build. **This fix was not run**: fix the existing env in place with
+   `mamba activate XAIRT; export PIP_CACHE_DIR=/work/07665/shrey911/ls6/pip_cache; pip install torch==2.8.0` (leaves the unused `nvidia-*-cu13` packages behind, harmless), then `sbatch env/create_env.slurm`
+   to check it, and read the `Driver:` and `torch cuda:` lines: the earlier torch was CUDA 13, whether the A100 nodes' driver supports it, and CUDA 12.8, was never checked, and a torch that cannot see the GPU falls back to the CPU silently. The login node cannot do it: it caps the
    virtual memory of a process at 8 GB (`ulimit -v`), which makes mamba fail with `std::bad_alloc`. The home directory has a 10 GB
    quota that pip's cache filled once, so the script sends the pip cache to `/work` (`PIP_CACHE_DIR`). Check the version list at the end of
    the `.out` file: numpy 1.x, protobuf 3.20.x, keras 2.9.x and TensorFlow 2.9.1 are expected. The old `py310_LRP` env is broken (numpy 2,
