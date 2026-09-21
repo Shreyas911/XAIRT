@@ -10,6 +10,7 @@ eccov4r5_LRP_A1B0_torch.py, which does the same with PyTorch and Captum.
 """
 
 import sys
+from os.path import join
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +54,19 @@ def make_train_fn(args):
         return best_model, innvestigate.model_wo_softmax(best_model)
 
     return train
+
+def make_get_model(args):
+    """get_model(lag, ctx) of the OI and analyze scripts: the saved Keras model of the lag, or, with --source train, a trained one."""
+
+    train = make_train_fn(args)
+
+    def get_model(lag, ctx):
+        if args.source == 'saved':
+            return keras.models.load_model(join(args.saved_models_dir, f'model{lag}_noL1.h5'),
+                                           custom_objects = {'metricF1': metricF1})
+        return common.train_on_lag(ctx, lag, train)
+
+    return get_model
 
 def predict(model, X):
     return model.predict(X)

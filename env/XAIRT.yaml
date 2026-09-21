@@ -11,7 +11,10 @@
 #     tensorflow >=2.6,<2.15, and newer TF ships Keras 3, which breaks tensorflow.keras.
 #   * TF's CUDA 11 libraries (cudatoolkit, cudnn, nccl) come from conda. Torch comes from pip,
 #     whose wheels bundle their own CUDA 12 libraries, so the two do not clash.
-#   * protobuf <3.20 : required by tensorflow 2.9.
+#   * numpy, protobuf and keras are not pinned: the conda-forge TF build constrains them (numpy <2,
+#     keras 2.9, libprotobuf 3.20). Do not add protobuf <3.20, it conflicts with that libprotobuf.
+#     The old env broke because pip later replaced numpy, protobuf and keras with numpy 2, protobuf 7
+#     and keras 3, so after the pip step check: pip list | grep -i -E "^(numpy|protobuf|keras) "
 #
 # TF 2.9.1 has no ARM wheel, so this file does not work on Vista (aarch64). That would need
 # tensorflow 2.10 to 2.14 instead.
@@ -28,7 +31,7 @@ dependencies:
   - pip
 
   # Core
-  - numpy>=1.22,<2
+  - numpy
   - scipy
   - scikit-learn
   - matplotlib
@@ -36,12 +39,10 @@ dependencies:
   - beartype
   - jaxtyping
 
-  # TensorFlow / Keras, GPU build with its CUDA libraries
-  - cudatoolkit
-  - cudnn
-  - nccl
-  - tensorflow==2.9.1=gpu_py310*
-  - protobuf<3.20
+  # TensorFlow / Keras, GPU build. conda-forge names its GPU builds cuda<ver>py<ver>, the
+  # gpu_py310* builds are on the defaults channel only. The build itself pulls in cudatoolkit,
+  # cudnn, nccl, keras 2.9, protobuf 3.20 and numpy <2, so none of them is listed here.
+  - tensorflow==2.9.1=cuda112py310*
 
   # ECCO stack used by the notebooks
   - xarray

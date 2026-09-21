@@ -202,7 +202,7 @@ _CAPTUM_METHODS = {"gradient"            : Saliency,
                    "integrated_gradients": IntegratedGradients,
                    "deep_lift.wrapper"   : DeepLift}
 
-_LRP_METHODS = ("lrp.z", "lrp.epsilon", "lrp.alpha_1_beta_0")
+_LRP_METHODS = ("lrp.z", "lrp.epsilon", "lrp.alpha_1_beta_0", "lrp.alpha_1_beta_0_IB")
 
 class XAITorch(_XAIBase):
     """
@@ -210,9 +210,16 @@ class XAITorch(_XAIBase):
 
     The method dict uses the innvestigate names, so one dict works for both backends:
       'gradient', 'input_t_gradient', 'integrated_gradients', 'deep_lift.wrapper',
-      'lrp.z', 'lrp.epsilon' (optParams: epsilon), 'lrp.alpha_1_beta_0'.
-    Other names and optParams (e.g. input_layer_rule, bias, the '_IB' variants)
-    are innvestigate-specific and raise NotImplementedError.
+      'lrp.z', 'lrp.epsilon' (optParams: epsilon), 'lrp.alpha_1_beta_0',
+      'lrp.alpha_1_beta_0_IB' (the bias is ignored, Captum's set_bias_to_zero).
+    Other names and optParams (e.g. input_layer_rule, bias, the other '_IB'
+    variants) are innvestigate-specific and raise NotImplementedError.
+
+    Captum's A1B0 clamps the weights to be non-negative and applies them to the
+    input as it is. innvestigate splits the input into its positive and negative
+    parts and uses the positive weights for the first and the negative weights for
+    the second. The two are the same for inputs >= 0 (e.g. after a ReLU), and not
+    for inputs of both signs, e.g. the first layer for anomalies.
 
     Captum LRP does not support Softmax/Sigmoid layers, so for 'lrp.*' pass a model
     without its final one (the equivalent of innvestigate.model_wo_softmax, see
@@ -263,18 +270,7 @@ class XAITorch(_XAIBase):
                 raise ValueError("Captum LRP does not support Softmax/Sigmoid layers. "
                                  "Pass the model without its final one, see model_wo_softmax_torch.")
 
-            # Set on every call, since rules stay attached to the model between analyzers
-            if name == "lrp.alpha_1_beta_0":
-                make_rule = Alpha1_Beta0_Rule
-            elif name == "lrp.epsilon":
-                epsilon = optParams.pop("epsilon", 1e-7)    # the innvestigate default
-                make_rule = lambda: EpsilonRule(epsilon = epsilon)
-            else:
-                make_rule = EpsilonRule     # lrp.z, the default epsilon is negligible
-
-            for module in self.model.modules():
-                if isinstance(module, nn.Linear):
-                    module.rule = make_rule()
+            optParams = self._attach_lrp_rules(method)
 
             Analyze = LRP(self.model)
 
@@ -286,6 +282,35 @@ class XAITorch(_XAIBase):
             raise NotImplementedError(f"optParams {list(optParams)} are not supported for '{name}' with Torch.")
 
         return Analyze
+
+    @beartype
+    def _attach_lrp_rules(self, method: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Puts the rule of an LRP method on the Linear layers, and returns the optParams that were not used.
+
+        Captum deletes the rules of the model at the end of every attribute() call, and a layer without
+        a rule gets the default epsilon rule, so this has to be done before each sample, not only when
+        the analyzer is created. Otherwise every sample but the first is explained with LRP-Z.
+        """
+
+        name = method["name"]
+        optParams = dict(method.get("optParams", {}))
+
+        if name == "lrp.alpha_1_beta_0":
+            make_rule = Alpha1_Beta0_Rule
+        elif name == "lrp.alpha_1_beta_0_IB":
+            make_rule = lambda: Alpha1_Beta0_Rule(set_bias_to_zero = True)
+        elif name == "lrp.epsilon":
+            epsilon = optParams.pop("epsilon", 1e-7)    # the innvestigate default
+            make_rule = lambda: EpsilonRule(epsilon = epsilon)
+        else:
+            make_rule = EpsilonRule     # lrp.z, the default epsilon is negligible
+
+        for module in self.model.modules():
+            if isinstance(module, nn.Linear):
+                module.rule = make_rule()
+
+        return optParams
 
     @beartype
     def _get_target_idx(self, sample_t: torch.Tensor) -> int:
@@ -317,6 +342,9 @@ class XAITorch(_XAIBase):
 
         if Analyze is None:
             Analyze = self._create_analyzer(method, kind, **kwargs)
+        elif method["name"] in _LRP_METHODS:
+            # Captum removed the rules after the previous sample
+            self._attach_lrp_rules(method)
 
         # Use the device the model is already on, as XAIKeras does not move anything
         device = next(self.model.parameters()).device

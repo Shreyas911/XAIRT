@@ -4,12 +4,25 @@ The same trained network explained by both XAI libraries: innvestigate (Keras) a
 The other two scripts train a separate network per backend, so their relevance maps differ both
 because of the training and because of the library. Here a network is trained once with Keras, its
 weights are copied into a PyTorch model (keras_to_torch), and LRP-A1B0, alpha=1 and beta=0 in every
-layer, is run with each library on exactly the same samples. Any difference is due to the libraries.
+layer, and LRP-A1B0-IB, the same ignoring the bias, are run with each library on exactly the same samples.
+Any difference is due to the libraries.
+
+Is agreement expected? From reading the code of innvestigate 2.1.0 and Captum 0.9.0, not yet from running it: both put the raw
+bias in the denominator of A1B0 and let it keep a share of the relevance, so the bias is not a difference. The input is:
+innvestigate uses the positive weights on the positive part of the input and the negative weights on the negative part, Captum only
+the positive weights on the input as it is. They are the same for inputs >= 0, the hidden layers after a ReLU, but not for the first
+layer here, since the SST anomalies have both signs. So agreement below 1 is expected for both methods, and it is the first layer
+that differs. The notebook uses the Bounded rule for the first layer, which Captum does not have.
+
+Hypothesis under test, and what each outcome would mean (see HANDOFF.md): keras vs keras_torch agree for inputs >= 0 and differ for
+inputs of both signs. A difference with --positive-inputs would mean the libraries differ in something other than the input sign, and
+agreement with signed inputs would mean the reading of the code is wrong. The bias is not expected to be a difference. Results of
+XAITorch from before its rules were attached before every sample cannot be used, only the first sample got the rule.
 
     python scripts_TomsQoI/eccov4r5_LRP_A1B0_compare.py --out-dir LRP_output_compare
     python scripts_TomsQoI/eccov4r5_LRP_A1B0_compare.py --epochs 2 --lags 0    # quick test
 
-Written to --out-dir: agreement_compare.json (the numbers below), the normalized mean relevance
+Written to --out-dir: agreement_compare.json (the numbers below, for each class and method), the normalized mean relevance
 maps of both libraries in a NetCDF file, and the Keras models.
 
 Per class (pos, neg) and lag it reports
@@ -40,7 +53,8 @@ from XAIRT import XAITorch, keras_to_torch, model_wo_softmax_torch
 import eccov4r5_common as common
 import eccov4r5_LRP_A1B0_keras as keras_script
 
-METHOD = dict(name='lrp.alpha_1_beta_0', title = 'LRP-A1B0', optParams = {})
+METHODS = [dict(name='lrp.alpha_1_beta_0'   , title = 'LRP-A1B0'   , optParams = {}),
+           dict(name='lrp.alpha_1_beta_0_IB', title = 'LRP-A1B0-IB', optParams = {})]
 
 def explain_torch(model_wo_softmax, method, samples):
     Xplain = XAITorch(model_wo_softmax, method, 'classic', samples, common.NORMALIZE)
@@ -123,15 +137,19 @@ if __name__ == "__main__":
             if len(idx_c) == 0:
                 continue
 
-            print(f"Analyze using {METHOD['title']} for {cls} samples")
-            a_keras = keras_script.explain(keras_wo_softmax, METHOD, X[idx_c])
-            a_torch = explain_torch(torch_wo_softmax, METHOD, X[idx_c])
+            result[cls] = {}
+            for method in METHODS:
+                key = common.title_key(method['title'])
 
-            result[cls], map_keras, map_torch = agreement(a_keras, a_torch)
-            maps[f"lrp_{common.lag_name(lag)}_a1b0_{cls}_keras"] = common.to_llc(map_keras, wetpoints)
-            maps[f"lrp_{common.lag_name(lag)}_a1b0_{cls}_torch"] = common.to_llc(map_torch, wetpoints)
+                print(f"Analyze using {method['title']} for {cls} samples")
+                a_keras = keras_script.explain(keras_wo_softmax, method, X[idx_c])
+                a_torch = explain_torch(torch_wo_softmax, method, X[idx_c])
 
-            print(f"  {cls}: " + ", ".join(f"{k} = {v:.4f}" for k, v in result[cls].items() if k != 'n'))
+                result[cls][key], map_keras, map_torch = agreement(a_keras, a_torch)
+                maps[f"lrp_{common.lag_name(lag)}_{key}_{cls}_keras"] = common.to_llc(map_keras, wetpoints)
+                maps[f"lrp_{common.lag_name(lag)}_{key}_{cls}_torch"] = common.to_llc(map_torch, wetpoints)
+
+                print(f"  {cls}, {method['title']}: " + ", ".join(f"{k} = {v:.4f}" for k, v in result[cls][key].items() if k != 'n'))
 
         results[str(lag)] = result
 

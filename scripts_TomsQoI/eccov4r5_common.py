@@ -11,6 +11,7 @@ it and how to explain it, see run_experiment().
 import argparse
 import json
 import os
+import types
 from os.path import join
 
 import matplotlib
@@ -52,7 +53,8 @@ def step_decay(epoch):
     lrate = initial_lrate * drop**np.floor((1+epoch)/epochs_drop)
     return lrate
 
-def parse_args(backend):
+def parse_args(backend, extra_args = None):
+    """extra_args(parser) adds the options of a script, e.g. add_oi_args in eccov4r5_OI_common.py"""
     p = argparse.ArgumentParser(description=f"ECCOv4r5 LRP-A1B0 experiment, {backend} backend.")
     # Sverdrup: /scratch2/pillarh/eccov4r4 and /scratch2/pillarh/eccov4r5 (the GRID and
     # SST_all.nc paths are the notebook's, thetaSurfECCOv4r4.nc was in /scratch2/shreyas/...)
@@ -67,7 +69,18 @@ def parse_args(backend):
     p.add_argument("--epochs", type=int, default=500, help="use a small number to test the script")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-plots", action="store_true", help="do not save figures")
+    if extra_args is not None:
+        extra_args(p)
     return p.parse_args()
+
+def add_model_args(parser, sources):
+    """The options of the scripts that need a trained network for each lag (OI and analyze)."""
+    parser.add_argument("--source", choices = sources, default = sources[0],
+                        help="where the networks come from: the saved Keras models of --saved-models-dir "
+                             "('saved' for Keras, 'saved-keras' to copy them into PyTorch) or 'train' to train them as in the LRP script")
+    parser.add_argument("--saved-models-dir",
+                        default = "LRP_output_forHelen/saved_models",
+                        help="directory with the Keras models model{lag}_noL1.h5, the path of the notebooks")
 
 # --- Data ---------------------------------------------------------------------------------
 
@@ -127,9 +140,14 @@ def anomalize_new(field, num_years = 31, first_leap_year_idx = 0):
     return field
 
 def load_data(r4_dir, r5_dir):
+    """X, oneHotCost, wetpoints, XC, YC of load_data_with_y"""
+    X, y, oneHotCost, wetpoints, XC, YC = load_data_with_y(r4_dir, r5_dir)
+    return X, oneHotCost, wetpoints, XC, YC
+
+def load_anomalies(r4_dir, r5_dir):
     """
-    Returns X (samples, wetpoints) of SST anomalies, the one-hot QoI (samples, 2) as float32,
-    the indices of the wetpoints and XC, YC for plotting.
+    Returns X_full (days, wetpoints) of the new SST anomalies, y_full (days,) of the QoI, the same at the
+    grid point of the objective function, the indices of the wetpoints and XC, YC for plotting.
 
     The notebook also read the mds SST files with xmitgcm and built a number of DataArrays
     (masks, X, y, ...) that the results never used, only XC and YC are still needed.
@@ -155,21 +173,62 @@ def load_data(r4_dir, r5_dir):
     XC = llc_dataarray(ds_r4['XC'].data)
     YC = llc_dataarray(ds_r4['YC'].data)
 
-    X = SST[:,wetpoints[0],wetpoints[1],wetpoints[2]].copy()
-    X = anomalize_new(X)
-    X = X[30:-30]
+    X_full = anomalize_new(SST[:,wetpoints[0],wetpoints[1],wetpoints[2]].copy())
+    y_full = anomalize_new(SST[:,10,1,43].copy())
 
-    y = SST[:,10,1,43].copy()
-    y = anomalize_new(y)
+    return X_full, y_full, wetpoints, XC, YC
+
+def make_qoi(X_full, y_full):
+    """
+    X (samples, wetpoints), the QoI y (samples,), the running mean of y_full, and the one-hot QoI (samples, 2) as float32.
+    The first and last 30 days are left out, since the QoI is a 61-day running mean.
+    """
+
+    X = X_full[30:-30]
+
     # https://stackoverflow.com/questions/13728392/moving-average-or-running-mean
-    y = np.convolve(y, np.ones(61)/61, mode='valid')
+    y = np.convolve(y_full, np.ones(61)/61, mode='valid')
 
     # float, since the trainers only take float arrays
     oneHotCost = np.zeros((y.shape[0], 2), dtype = np.float32)
     oneHotCost[:,0] = y >= 0.0
     oneHotCost[:,1] = y <  0.0
 
-    return X, oneHotCost, wetpoints, XC, YC
+    return X, y, oneHotCost
+
+def load_data_with_y(r4_dir, r5_dir):
+    """
+    Returns X (samples, wetpoints) of SST anomalies, the QoI y (samples,) before it is made a class, the one-hot QoI
+    (samples, 2) as float32, the indices of the wetpoints and XC, YC for plotting, see make_qoi.
+    """
+
+    X_full, y_full, wetpoints, XC, YC = load_anomalies(r4_dir, r5_dir)
+    X, y, oneHotCost = make_qoi(X_full, y_full)
+
+    return X, y, oneHotCost, wetpoints, XC, YC
+
+def make_context(args):
+    """
+    The data and what is needed to train a network of a lag: X, oneHotCost, wetpoints, XC, YC, layers, class_weight,
+    idx (the samples before it are for training and validation, the rest is the test set) and models_dir.
+    """
+
+    os.makedirs(args.out_dir, exist_ok = True)
+    models_dir = join(args.out_dir, 'models')
+    os.makedirs(models_dir, exist_ok = True)
+
+    X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir)
+    return types.SimpleNamespace(X = X, oneHotCost = oneHotCost, wetpoints = wetpoints, XC = XC, YC = YC,
+                                 layers = make_layers(X.shape[1]),
+                                 class_weight = class_weights(oneHotCost),
+                                 idx = int(X.shape[0]*(1-TEST_SPLIT_FRAC)),
+                                 models_dir = models_dir)
+
+def train_on_lag(ctx, lag, train_fn):
+    """Trains a network of a lag as the LRP scripts do, train_fn is the make_train_fn(args) of the backend."""
+    x_t, x_v, y_t, y_v = split_lag(ctx.X[:ctx.idx], ctx.oneHotCost[:ctx.idx], lag, VAL_SPLIT_FRAC)
+    model, _ = train_fn(x_t, y_t, x_v, y_v, lag, ctx.layers, ctx.class_weight, ctx.models_dir)
+    return model
 
 def class_weights(oneHotCost):
     train = oneHotCost[:-N_TEST]

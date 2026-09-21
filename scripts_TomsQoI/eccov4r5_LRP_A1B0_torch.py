@@ -11,17 +11,19 @@ Keras script, so the two backends run the identical experiment.
 """
 
 import sys
+from os.path import join
 from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
 # XAIRT imports TensorFlow too. Keep it off the GPU, which is for PyTorch.
 tf.config.set_visible_devices([], 'GPU')
+import tensorflow.keras as keras
 import torch
 
 # Append the src directory of the repository to sys.path, then import XAIRT
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from XAIRT import TrainTorchFullyConnectedNN, XAITorch, model_wo_softmax_torch
+from XAIRT import TrainTorchFullyConnectedNN, XAITorch, keras_to_torch, metricF1, model_wo_softmax_torch
 
 import eccov4r5_common as common
 
@@ -51,6 +53,23 @@ def make_train_fn(args):
         return best_model, model_wo_softmax_torch(best_model)
 
     return train
+
+def make_get_model(args):
+    """
+    get_model(lag, ctx) of the OI and analyze scripts: with --source saved-keras the saved Keras model of the lag, its weights
+    copied into a PyTorch model (keras_to_torch), or, with --source train, a model trained with PyTorch.
+    """
+
+    train = make_train_fn(args)
+
+    def get_model(lag, ctx):
+        if args.source == 'saved-keras':
+            keras_model = keras.models.load_model(join(args.saved_models_dir, f'model{lag}_noL1.h5'),
+                                                  custom_objects = {'metricF1': metricF1})
+            return keras_to_torch(keras_model)
+        return common.train_on_lag(ctx, lag, train)
+
+    return get_model
 
 def predict(model, X):
     with torch.no_grad():
