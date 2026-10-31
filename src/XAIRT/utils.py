@@ -40,13 +40,11 @@ def getLayerIndexByName_torch(model: torch.nn.Module, layername: str) -> int:
             return idx
     raise ValueError(f"layername: {layername} not found.")
 
-# Crucial function decorator for speedup
+# Crucial function decorator for speedup. tf.function must not wrap the beartype wrapper: beartype keeps the
+# annotated types (the Tensor class among them) as hidden default arguments, which tf.function then tries to trace,
+# and fails with "Tensor.__tf_tracing_type__() missing 1 required positional argument". So the check is outside.
 @tf.function
-@beartype
-def Keras_GradientDescent_useGradientTape(model: Model,
-                                          x: Tensor,
-                                          desired_labels: Tensor,
-                                          compute_loss: Callable) -> Tensor:
+def _keras_gradient_of_loss(model, x, desired_labels, compute_loss):
     with tf.GradientTape() as g:
         g.watch(x)
         preds = model(x)
@@ -56,6 +54,13 @@ def Keras_GradientDescent_useGradientTape(model: Model,
     grads = g.gradient(loss, x)
 
     return grads
+
+@beartype
+def Keras_GradientDescent_useGradientTape(model: Model,
+                                          x: Tensor,
+                                          desired_labels: Tensor,
+                                          compute_loss: Callable) -> Tensor:
+    return _keras_gradient_of_loss(model, x, desired_labels, compute_loss)
 
 # Gradient of the loss w.r.t. the input x. Follows the Torch loss convention,
 # compute_loss(preds, desired_labels), whereas the Keras one uses (y_true, y_pred).

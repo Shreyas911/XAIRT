@@ -49,7 +49,7 @@ def optimal_input(model, desired_labels, init, eta, n_iters, print_freq):
 
 if __name__ == "__main__":
 
-    args = common.parse_args("torch", lambda p: oi_common.add_oi_args(p, ('saved-keras', 'train')))
+    args = common.parse_args("torch", lambda p: oi_common.add_oi_args(p, ('saved-keras', 'saved-torch', 'train')))
 
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False

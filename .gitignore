@@ -3,3 +3,8 @@
 **/__pycache__
 **/*.out
 **/*.err
+# Output of the scripts and the jobs. results/logs is kept (empty), since SLURM does not create the directory of its logs
+scripts_TomsQoI/results/*
+!scripts_TomsQoI/results/logs/
+scripts_TomsQoI/results/logs/*
+!scripts_TomsQoI/results/logs/.gitkeep

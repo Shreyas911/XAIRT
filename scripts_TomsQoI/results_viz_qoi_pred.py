@@ -12,7 +12,9 @@ Written to --out-dir: qoi_pred_mismatch.png
 
 import argparse
 import os
+import sys
 from os.path import join
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -28,7 +30,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="True against predicted QoI.")
     p.add_argument("--results-dir", default = "LRP_output_forHelen", help="directory with the file")
     p.add_argument("--file", default = "qoi_pred.nc", help="the notebook name, eccov4r5_analyze_{keras,torch}.py write qoi_pred_{keras,torch}.nc")
-    p.add_argument("--out-dir", default = "Results")
+    p.add_argument("--out-dir", default = str(Path(__file__).resolve().parent / "results" / Path(sys.argv[0]).stem))
     p.add_argument("--lags", type = int, nargs = "+", default = [-60, -30], help="lags in days, the notebook has -60 and -30")
     args = p.parse_args()
 

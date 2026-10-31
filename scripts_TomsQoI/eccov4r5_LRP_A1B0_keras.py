@@ -24,9 +24,8 @@ from XAIRT import TrainKerasFullyConnectedNN, XAIKeras, metricF1
 
 import eccov4r5_common as common
 
-# LRP-A1B0-B is the method of the notebook. Its 'Bounded' input layer rule only exists in
-# innvestigate, so LRP-A1B0, plain alpha=1, beta=0 in every layer, is also run: it is the one
-# that can be compared with Captum in the Torch script.
+# LRP-A1B0-B is the method of the notebook. LRP-A1B0, plain alpha=1, beta=0 in every layer, is also run.
+# The Torch script runs both with innvestigate's rules (XAITorch's BoundedRule and sign_split).
 METHODS = [dict(name='lrp.alpha_1_beta_0_IB', title = 'LRP-A1B0-B', optParams = {'input_layer_rule':'Bounded'}),
            dict(name='lrp.alpha_1_beta_0'   , title = 'LRP-A1B0'  , optParams = {})]
 
@@ -56,14 +55,19 @@ def make_train_fn(args):
     return train
 
 def make_get_model(args):
-    """get_model(lag, ctx) of the OI and analyze scripts: the saved Keras model of the lag, or, with --source train, a trained one."""
+    """get_model(lag, ctx) of the OI, analyze and compare scripts: the saved Keras model of the lag, or, with --source train, a trained one."""
 
     train = make_train_fn(args)
 
     def get_model(lag, ctx):
         if args.source == 'saved':
-            return keras.models.load_model(join(args.saved_models_dir, f'model{lag}_noL1.h5'),
-                                           custom_objects = {'metricF1': metricF1})
+            model = keras.models.load_model(join(args.saved_models_dir, f'model{lag}_noL1.h5'),
+                                            custom_objects = {'metricF1': metricF1})
+            # The saved layers are 'dense', 'dense_1', ..., and innvestigate.model_wo_softmax names its new layer 'dense' in
+            # a fresh session, which Keras refuses ("The name "dense" is used 2 times in the model").
+            for layer in model.layers:
+                layer._name = f"saved_{layer.name}"
+            return model
         return common.train_on_lag(ctx, lag, train)
 
     return get_model

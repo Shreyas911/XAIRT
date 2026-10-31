@@ -8,6 +8,8 @@ notebooks compare the libraries with. Only numpy here, so it is the same for bot
 """
 
 import argparse
+import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -17,7 +19,8 @@ NORMALIZE_SUM = {'bool_': True, 'kind': 'Sum'}
 
 def parse_args(backend, epochs, n_samples):
     p = argparse.ArgumentParser(description=f"simpleTests, {backend} backend.")
-    p.add_argument("--out-dir", default=f"simpleTests_output_{backend}", help="the trained models are written here")
+    p.add_argument("--out-dir", default=str(Path(__file__).resolve().parent / "results" / Path(sys.argv[0]).stem),
+                   help="the trained models are written here, by default scripts_TomsQoI/results/<script name>")
     p.add_argument("--n-samples", type=int, default=n_samples)
     p.add_argument("--epochs", type=int, default=epochs, help="use a small number to test the script")
     p.add_argument("--seed", type=int, default=42)

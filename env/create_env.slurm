@@ -5,8 +5,8 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -t 00:20:00
-#SBATCH -o create_XAIRT_env.%j.out
-#SBATCH -e create_XAIRT_env.%j.err
+#SBATCH -o scripts_TomsQoI/results/logs/create_XAIRT_env.%j.out
+#SBATCH -e scripts_TomsQoI/results/logs/create_XAIRT_env.%j.err
 
 # Builds the XAIRT environment on a GPU node, and checks it. The login node caps the virtual memory of a process
 # at 8 GB, which makes mamba fail with std::bad_alloc while it extracts packages. If the environment is already
@@ -36,13 +36,19 @@ else
     mamba env create -f env/XAIRT.yaml || exit 1
 fi
 
+# Use the env this way in jobs. With mamba run or conda activate, TensorFlow finds the libcublas.so.11 of the cuda/11.4
+# module before the env's and sees no GPU; torch is not affected.
+ENV=$MAMBA_DIR/envs/XAIRT
+export PATH=$ENV/bin:$PATH
+export LD_LIBRARY_PATH=$ENV/lib:$LD_LIBRARY_PATH
+
 echo
 echo "--- packages"
-mamba run -n XAIRT pip list 2>/dev/null | grep -i -E "^(numpy|protobuf|keras|tensorflow|torch|captum|innvestigate|nvidia-nccl) "
+pip list 2>/dev/null | grep -i -E "^(numpy|protobuf|keras|tensorflow|torch|captum|innvestigate|nvidia-nccl) "
 
 # The order tensorflow, then torch is the one that the scripts use, and the one that a wrong NCCL breaks
 echo "--- tensorflow then torch, and the GPUs"
-mamba run -n XAIRT python -c "import tensorflow as tf, torch; print('TF GPUs:', tf.config.list_physical_devices('GPU'), 'torch cuda:', torch.cuda.is_available(), 'torch', torch.__version__, torch.version.cuda)"
+python -c "import tensorflow as tf, torch; print('TF GPUs:', len(tf.config.list_physical_devices('GPU')), 'torch cuda:', torch.cuda.is_available(), 'torch', torch.__version__, torch.version.cuda)"
 
 echo "--- import XAIRT"
-PYTHONPATH=src mamba run -n XAIRT python -c "import XAIRT; print('XAIRT ok')"
+PYTHONPATH=src python -c "import XAIRT; print('XAIRT ok')"

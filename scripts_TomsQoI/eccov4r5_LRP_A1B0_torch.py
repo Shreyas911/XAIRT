@@ -27,9 +27,10 @@ from XAIRT import TrainTorchFullyConnectedNN, XAITorch, keras_to_torch, metricF1
 
 import eccov4r5_common as common
 
-# Captum has no 'Bounded' input layer rule, so LRP-A1B0-B of the notebook cannot be run here.
-# This is the plain method that the Keras script also runs.
-METHODS = [dict(name='lrp.alpha_1_beta_0', title = 'LRP-A1B0', optParams = {})]
+# The methods of the Keras script, with innvestigate's rules: LRP-A1B0-B of the notebook (XAITorch's BoundedRule in the
+# first layer) and LRP-A1B0 with sign_split, innvestigate's A1B0 for the signed inputs of the first layer.
+METHODS = [dict(name='lrp.alpha_1_beta_0_IB', title = 'LRP-A1B0-B', optParams = {'input_layer_rule':'Bounded'}),
+           dict(name='lrp.alpha_1_beta_0'   , title = 'LRP-A1B0'  , optParams = {'sign_split': True})]
 
 def make_train_fn(args):
 
@@ -57,7 +58,8 @@ def make_train_fn(args):
 def make_get_model(args):
     """
     get_model(lag, ctx) of the OI and analyze scripts: with --source saved-keras the saved Keras model of the lag, its weights
-    copied into a PyTorch model (keras_to_torch), or, with --source train, a model trained with PyTorch.
+    copied into a PyTorch model (keras_to_torch), with --source saved-torch a model saved by this script (model{lag}_noL1.pt
+    in --saved-models-dir, e.g. the models/ of an LRP_torch run), or, with --source train, a model trained with PyTorch.
     """
 
     train = make_train_fn(args)
@@ -67,6 +69,8 @@ def make_get_model(args):
             keras_model = keras.models.load_model(join(args.saved_models_dir, f'model{lag}_noL1.h5'),
                                                   custom_objects = {'metricF1': metricF1})
             return keras_to_torch(keras_model)
+        if args.source == 'saved-torch':
+            return TrainTorchFullyConnectedNN.load_saved_model(join(args.saved_models_dir, f'model{lag}_noL1.pt'), ctx.layers)
         return common.train_on_lag(ctx, lag, train)
 
     return get_model

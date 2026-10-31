@@ -11,8 +11,10 @@ it and how to explain it, see run_experiment().
 import argparse
 import json
 import os
+import sys
 import types
 from os.path import join
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -53,6 +55,12 @@ def step_decay(epoch):
     lrate = initial_lrate * drop**np.floor((1+epoch)/epochs_drop)
     return lrate
 
+RESULTS_DIR = Path(__file__).resolve().parent / "results"
+
+def default_out_dir():
+    """scripts_TomsQoI/results/<name of the script that runs>, the default --out-dir of every script."""
+    return str(RESULTS_DIR / Path(sys.argv[0]).stem)
+
 def parse_args(backend, extra_args = None):
     """extra_args(parser) adds the options of a script, e.g. add_oi_args in eccov4r5_OI_common.py"""
     p = argparse.ArgumentParser(description=f"ECCOv4r5 LRP-A1B0 experiment, {backend} backend.")
@@ -62,8 +70,8 @@ def parse_args(backend, extra_args = None):
                    help="directory with thetaSurfECCOv4r4.nc")
     p.add_argument("--r5-dir", default="/work/07665/shrey911/ls6/LRP_eccov4r5_data",
                    help="directory with GRID/ and SST_all.nc")
-    p.add_argument("--out-dir", default=f"LRP_output_{backend}",
-                   help="models, results and figures are written here")
+    p.add_argument("--out-dir", default=default_out_dir(),
+                   help="models, results and figures are written here, by default scripts_TomsQoI/results/<script name>")
     p.add_argument("--lags", type=int, nargs="+", default=[-60,-30,0,30,60,90,120,150,180],
                    help="lags in days")
     p.add_argument("--epochs", type=int, default=500, help="use a small number to test the script")
@@ -77,7 +85,8 @@ def add_model_args(parser, sources):
     """The options of the scripts that need a trained network for each lag (OI and analyze)."""
     parser.add_argument("--source", choices = sources, default = sources[0],
                         help="where the networks come from: the saved Keras models of --saved-models-dir "
-                             "('saved' for Keras, 'saved-keras' to copy them into PyTorch) or 'train' to train them as in the LRP script")
+                             "('saved' for Keras, 'saved-keras' to copy them into PyTorch), the saved PyTorch models ('saved-torch', "
+                             "model{lag}_noL1.pt) or 'train' to train them as in the LRP script")
     parser.add_argument("--saved-models-dir",
                         default = "LRP_output_forHelen/saved_models",
                         help="directory with the Keras models model{lag}_noL1.h5, the path of the notebooks")

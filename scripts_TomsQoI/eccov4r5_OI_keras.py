@@ -53,6 +53,9 @@ if __name__ == "__main__":
     ### https://keras.io/examples/keras_recipes/reproducibility_recipes/ ###
     keras.utils.set_random_seed(args.seed)
     tf.config.experimental.enable_op_determinism()
+    # On the A100s TensorFlow multiplies matrices in TF32 by default (about 1e-3 off float32), which would add up over
+    # the steps of the descent and make the OI differ from the Torch one. Full float32.
+    tf.config.experimental.enable_tensor_float_32_execution(False)
 
     print("Running on GPU" if tf.config.list_physical_devices('GPU') else "Running on CPU")
 

@@ -40,7 +40,7 @@ import eccov4r5_viz_common as viz
 N_DAYS = 11323    # 1992-01-01 to 2022-12-31, the files have up to 2023-06
 
 def add_args(p):
-    p.set_defaults(out_dir = "Results_data")
+    p.set_defaults(out_dir = common.default_out_dir())
     p.add_argument("--build-sst", action = "store_true", help="write SST_all.nc first")
     p.add_argument("--force", action = "store_true", help="overwrite SST_all.nc")
     p.add_argument("--long-lags", type = int, nargs = "+", default = [-1500,-1000,-500,-365,365,500,1000,1500,2000],

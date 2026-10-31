@@ -357,15 +357,16 @@ class TrainTorchFullyConnectedNN:
         val = layer_cfg.get('use_bias', True)
         return True if val is None else bool(val)
 
+    @staticmethod
     @beartype
-    def _build_model_modules(self) -> list[nn.Module]:
+    def _build_model_modules(layers_cfg: list) -> list[nn.Module]:
 
         modules = []
-        for i in range(1, len(self.layers_cfg)):
-            cfg      = self.layers_cfg[i]
-            in_dim   = self.layers_cfg[i - 1]['size']
+        for i in range(1, len(layers_cfg)):
+            cfg      = layers_cfg[i]
+            in_dim   = layers_cfg[i - 1]['size']
             out_dim  = cfg['size']
-            use_bias = self._safe_use_bias(cfg)
+            use_bias = TrainTorchFullyConnectedNN._safe_use_bias(cfg)
 
             linear = nn.Linear(in_dim, out_dim, bias=use_bias)
             # Same distribution as Keras HeNormal: truncated normal at +-2 std,
@@ -377,7 +378,7 @@ class TrainTorchFullyConnectedNN:
                 nn.init.zeros_(linear.bias)
             modules.append(linear)
 
-            act = self._get_activation(cfg.get('activation'))
+            act = TrainTorchFullyConnectedNN._get_activation(cfg.get('activation'))
             if act is not None:
                 modules.append(act)
         return modules
@@ -480,7 +481,7 @@ class TrainTorchFullyConnectedNN:
         if self.layers_cfg[0].get("use_bias") is not None:
             raise ValueError("Input layer cannot have a bias.")
 
-        self.model = nn.Sequential(*self._build_model_modules())
+        self.model = nn.Sequential(*self._build_model_modules(self.layers_cfg))
 
     @beartype
     def _regularization(self) -> torch.Tensor:
@@ -607,24 +608,29 @@ class TrainTorchFullyConnectedNN:
             if self.verbose and epoch % 10 == 0:
                 print(f"Epoch {epoch:4d} | train loss: {epoch_loss:.6f} | val loss: {monitor_loss:.6f}")
 
+    @staticmethod
     @beartype
-    def loadBestModel(self) -> nn.Module:
+    def load_saved_model(path: str, layers_cfg: list) -> nn.Module:
+        """A model saved by quickTrain (its .pt state dict), rebuilt from the layers it was trained with, in eval mode."""
 
         # Rebuild architecture (init weights are immediately overwritten)
-        best_model = nn.Sequential(*self._build_model_modules())
+        model = nn.Sequential(*TrainTorchFullyConnectedNN._build_model_modules(layers_cfg))
 
         # weights_only=True suppresses FutureWarning on PyTorch >= 2.0
         # and is required in future PyTorch versions
         try:
-            state = torch.load(self.mod_path, map_location='cpu',
-                               weights_only=True)
+            state = torch.load(path, map_location='cpu', weights_only=True)
         except TypeError:
             # PyTorch < 1.13 does not have the weights_only argument
-            state = torch.load(self.mod_path, map_location='cpu')
+            state = torch.load(path, map_location='cpu')
 
-        best_model.load_state_dict(state)
-        best_model.eval()
-        return best_model
+        model.load_state_dict(state)
+        model.eval()
+        return model
+
+    @beartype
+    def loadBestModel(self) -> nn.Module:
+        return self.load_saved_model(self.mod_path, self.layers_cfg)
 
     @beartype
     def quickTrain(self, decay_func: Optional[Callable[[int], float]] = None) -> nn.Module:

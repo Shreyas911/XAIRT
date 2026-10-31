@@ -21,7 +21,7 @@ import eccov4r5_analyze_common as analyze_common
 
 if __name__ == "__main__":
 
-    args = common.parse_args("torch", lambda p: common.add_model_args(p, ('saved-keras', 'train')))
+    args = common.parse_args("torch", lambda p: common.add_model_args(p, ('saved-keras', 'saved-torch', 'train')))
 
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False

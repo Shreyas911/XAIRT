@@ -3,24 +3,17 @@ The same trained network explained by both XAI libraries: innvestigate (Keras) a
 
 The other two scripts train a separate network per backend, so their relevance maps differ both
 because of the training and because of the library. Here a network is trained once with Keras, its
-weights are copied into a PyTorch model (keras_to_torch), and LRP-A1B0, alpha=1 and beta=0 in every
-layer, and LRP-A1B0-IB, the same ignoring the bias, are run with each library on exactly the same samples.
-Any difference is due to the libraries.
+weights are copied into a PyTorch model (keras_to_torch), and the methods of eccov4r5_LRP_A1B0_keras.py are run with each
+library on exactly the same samples: LRP-A1B0-B of the notebook (Bounded rule in the first layer, A1B0 ignoring the bias in the
+others) and LRP-A1B0. Any difference is due to the libraries.
 
-Is agreement expected? From reading the code of innvestigate 2.1.0 and Captum 0.9.0, not yet from running it: both put the raw
-bias in the denominator of A1B0 and let it keep a share of the relevance, so the bias is not a difference. The input is:
-innvestigate uses the positive weights on the positive part of the input and the negative weights on the negative part, Captum only
-the positive weights on the input as it is. They are the same for inputs >= 0, the hidden layers after a ReLU, but not for the first
-layer here, since the SST anomalies have both signs. So agreement below 1 is expected for both methods, and it is the first layer
-that differs. The notebook uses the Bounded rule for the first layer, which Captum does not have.
+Captum's own A1B0 differs from innvestigate's for inputs of both signs, such as the SST anomalies of the first layer: the positive
+contributions are x_i (w_ij)+ in Captum and (x_i w_ij)+ in innvestigate (fake_data_LRP_A1B0_compare.py). So XAITorch runs here with
+innvestigate's rules, sign_split for A1B0 and its BoundedRule for the first layer of A1B0-B, and agreement to float precision is
+expected for both methods.
 
-Hypothesis under test, and what each outcome would mean (see HANDOFF.md): keras vs keras_torch agree for inputs >= 0 and differ for
-inputs of both signs. A difference with --positive-inputs would mean the libraries differ in something other than the input sign, and
-agreement with signed inputs would mean the reading of the code is wrong. The bias is not expected to be a difference. Results of
-XAITorch from before its rules were attached before every sample cannot be used, only the first sample got the rule.
-
-    python scripts_TomsQoI/eccov4r5_LRP_A1B0_compare.py --out-dir LRP_output_compare
-    python scripts_TomsQoI/eccov4r5_LRP_A1B0_compare.py --epochs 2 --lags 0    # quick test
+    python scripts_TomsQoI/eccov4r5_LRP_A1B0_compare.py                     # the saved Keras models of --saved-models-dir
+    python scripts_TomsQoI/eccov4r5_LRP_A1B0_compare.py --source train --epochs 2 --lags 0    # trained, quick test
 
 Written to --out-dir: agreement_compare.json (the numbers below, for each class and method), the normalized mean relevance
 maps of both libraries in a NetCDF file, and the Keras models.
@@ -43,6 +36,7 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 import tensorflow.keras as keras
+import innvestigate
 import torch
 import xarray as xr
 
@@ -53,10 +47,11 @@ from XAIRT import XAITorch, keras_to_torch, model_wo_softmax_torch
 import eccov4r5_common as common
 import eccov4r5_LRP_A1B0_keras as keras_script
 
-METHODS = [dict(name='lrp.alpha_1_beta_0'   , title = 'LRP-A1B0'   , optParams = {}),
-           dict(name='lrp.alpha_1_beta_0_IB', title = 'LRP-A1B0-IB', optParams = {})]
+METHODS = keras_script.METHODS
 
 def explain_torch(model_wo_softmax, method, samples):
+    """The method with innvestigate's A1B0 (sign_split), see the docstring."""
+    method = dict(method, optParams = {**method['optParams'], 'sign_split': True})
     Xplain = XAITorch(model_wo_softmax, method, 'classic', samples, common.NORMALIZE)
     a, _ = Xplain.quick_analyze()
     return a
@@ -89,10 +84,13 @@ def agreement(a_keras, a_torch):
 
 if __name__ == "__main__":
 
-    args = common.parse_args("compare")
+    args = common.parse_args("compare", lambda p: common.add_model_args(p, ('saved', 'train')))
 
     keras.utils.set_random_seed(args.seed)
     tf.config.experimental.enable_op_determinism()
+    # On the A100s TensorFlow multiplies matrices in TF32 by default, which makes the Keras outputs differ from
+    # PyTorch by about 1e-3 (job 3544505). Full float32 for the comparison.
+    tf.config.experimental.enable_tensor_float_32_execution(False)
 
     # Required by innvestigate
     tf.compat.v1.disable_eager_execution()
@@ -100,16 +98,9 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    os.makedirs(args.out_dir, exist_ok = True)
-    models_dir = join(args.out_dir, 'models')
-    os.makedirs(models_dir, exist_ok = True)
-
-    X, oneHotCost, wetpoints, XC, YC = common.load_data(args.r4_dir, args.r5_dir)
-    layers = common.make_layers(X.shape[1])
-    class_weight = common.class_weights(oneHotCost)
-    train = keras_script.make_train_fn(args)
-
-    idx = int(X.shape[0]*(1-common.TEST_SPLIT_FRAC))
+    ctx = common.make_context(args)
+    X, oneHotCost, wetpoints = ctx.X, ctx.oneHotCost, ctx.wetpoints
+    get_model = keras_script.make_get_model(args)
 
     results = {}
     maps = {}
@@ -117,8 +108,8 @@ if __name__ == "__main__":
 
         print(f'Lag: {lag} days, for Theta')
 
-        x_t, x_v, y_t, y_v = common.split_lag(X[:idx], oneHotCost[:idx], lag, common.VAL_SPLIT_FRAC)
-        model, keras_wo_softmax = train(x_t, y_t, x_v, y_v, lag, layers, class_weight, models_dir)
+        model = get_model(lag, ctx)
+        keras_wo_softmax = innvestigate.model_wo_softmax(model)
 
         torch_model = keras_to_torch(model)
         torch_wo_softmax = model_wo_softmax_torch(torch_model)

@@ -19,7 +19,7 @@ import ecco_v4_py as ecco
 import eccov4r5_common as common
 
 def add_viz_args(parser):
-    parser.set_defaults(out_dir = "Results")
+    parser.set_defaults(out_dir = common.default_out_dir())
     parser.add_argument("--results-dir", default = "LRP_output_forHelen",
                         help="directory with the NetCDF files of the LRP and OI results, the path of the notebooks")
 
