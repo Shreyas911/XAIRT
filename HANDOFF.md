@@ -21,6 +21,21 @@ Concretely, before a session ends (and whenever something important happens), re
 
 Also keep this instruction at the top of the file.
 
+**Back up the session transcript too (also from the owner).** The session of 2026-09-20 was lost: Claude Code deleted its transcript after the
+default 30 days (`cleanupPeriodDays`). Since 2026-10-31, `~/.claude/settings.json` sets `"cleanupPeriodDays": 3650`, and copies are kept in
+`/work/07665/shrey911/ls6/claude_session_backups/` (the `.jsonl` transcripts and the `memory/` notes). **Every session should refresh that copy
+before it ends** (and after big milestones), with:
+
+```bash
+mkdir -p /work/07665/shrey911/ls6/claude_session_backups
+cp -a ~/.claude/projects/-home1-07665-shrey911-XAIRT/*.jsonl ~/.claude/projects/-home1-07665-shrey911-XAIRT/memory \
+      /work/07665/shrey911/ls6/claude_session_backups/
+```
+
+Sessions so far: `3cf0f372-6954-4299-afcf-169612297e29` (2026-10-31). Add each new session id here. A session can be resumed with
+`claude --resume` (pick from a list) or `claude --continue` (the latest) from `/home1/07665/shrey911/XAIRT`, or from the VS Code extension's past
+conversations. The transcript is a convenience; this file and git (commit and push) remain the durable record.
+
 ---
 
 ## 1. Where things stand, in short
