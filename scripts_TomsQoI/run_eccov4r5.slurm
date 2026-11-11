@@ -74,4 +74,13 @@ needs LRP_compare_torch_trained TORCH_MODELS || run LRP_compare_torch_trained $S
 run dead_neurons_seeds $S/eccov4r5_dead_neurons.py --backends keras torch --seeds 42 43 44 --lags -30 0 30 60 120 --out-dir dead_neurons_seeds
 run dead_neurons_keras_eager $S/eccov4r5_dead_neurons.py --backends keras --keras-eager --no-tf32 --seeds 42 43 44 --lags -30 0 120 --out-dir dead_neurons_keras_eager
 needs OI_torch_in_keras_trained TORCH_MODELS || run OI_torch_in_keras_trained $S/eccov4r5_OI_keras.py --source saved-torch --saved-models-dir "$TORCH_MODELS" --out-dir OI_torch_in_keras_trained
+
+# The saved notebook models with the notebooks' settings, all 9 lags: OI (Keras and the same networks in Torch; the Keras OI is slow,
+# give -t 24:00:00), and both libraries' LRP maps (to compare with the published file), and the negative-class check of the networks
+# of an LRP run (KERAS_MODELS, or TORCH_MODELS copied into Keras)
+run OI_keras_saved_full $S/eccov4r5_OI_keras.py --source saved       --saved-models-dir $MODELS --out-dir OI_keras_saved_full
+run OI_torch_saved_full $S/eccov4r5_OI_torch.py --source saved-keras --saved-models-dir $MODELS --out-dir OI_torch_saved_full
+run LRP_compare_saved_all $S/eccov4r5_LRP_A1B0_compare.py --source saved --saved-models-dir $MODELS --out-dir LRP_compare_saved_all
+needs negative_class_trained KERAS_MODELS || run negative_class_trained $S/eccov4r5_negative_class_LRP.py --source saved --saved-models-dir "$KERAS_MODELS" --n-lrp 300 --out-dir negative_class_trained
+needs negative_class_torch_trained TORCH_MODELS || run negative_class_torch_trained $S/eccov4r5_negative_class_LRP.py --source saved-torch --saved-models-dir "$TORCH_MODELS" --n-lrp 300 --out-dir negative_class_torch_trained
 echo "done"

@@ -401,6 +401,47 @@ imports to Keras and uses XAI. Will be good to compare." and "Also investigate w
 | 3573699 | gpu-a100-dev, 1.5 h | `results/checks/check_followup3.slurm`: `check_oi_speed.py` both modes; `dead_neurons --inspect` of saved, keras500 (3544560), torch500 (3544561) at all 9 lags and of the mini 3-epoch networks; `dead_neurons` train mode test (3 epochs, lag 0, both backends); `LRP_compare_torch_trained`, `OI_torch_in_keras_trained`, `OI_torch_trained` on the mini Torch networks (lags 0 60, 20 OI steps: Keras and Torch OI of the same Torch network, which with the new loss should agree). **Exits 1 if any run fails.** Log `results/checks/check_followup3.<id>.out`, run dir `results/checks/followup3_<id>/` | 3573687 `afterany` |
 | 3573700 | gpu-a100, 8 h | `run_eccov4r5.slurm dead_neurons_seeds dead_neurons_keras_eager`: Keras and Torch, seeds 42 43 44, lags -30 0 30 60 120, 500 epochs; then Keras eager + no TF32, seeds 42 43 44, lags -30 0 120. Seed 42 should reproduce 3544560/3544561 (a check of determinism). About 4 h estimated. Output `results/ecco_3573700/dead_neurons_*/dead_neurons.json` | 3573699 `afterok` (if 3573699 fails it stays `DependencyNeverSatisfied`: fix, `scancel`, resubmit) |
 
+### Queued 2026-11-11, before the owner's week (or more) away: everything discussed, as jobs
+
+The owner: "Are all the things we discussed being tested? I will be gone for a week or more so want to start as many jobs as
+possible." Submitted 2026-11-11 (3573699 was running then). `K` = `results/ecco_3544560/LRP_keras/models` (500-epoch Keras networks),
+`T` = `results/ecco_3544561/LRP_torch/models` (500-epoch Torch networks). All `run_eccov4r5.slurm` jobs log to
+`results/logs/XAIRT_ecco.<id>.out` (one line per run: exit code, seconds) and write to `results/ecco_<id>/<run name>/` and
+`<run name>.log` (now unbuffered). Limits found: gpu-a100 max 48 h per job, 20 running and 100 submitted jobs per user;
+**gpu-a100-dev at most 3 submitted jobs per user** (`QOSMaxSubmitJobPerUserLimit`).
+
+New run names in `run_eccov4r5.slurm`: `OI_keras_saved_full`, `OI_torch_saved_full` (saved notebook networks, notebook OI settings: 9
+lags, both kinds, 10000 steps), `LRP_compare_saved_all` (saved networks, 9 lags, both libraries, new normalization),
+`negative_class_trained` (KERAS_MODELS), `negative_class_torch_trained` (TORCH_MODELS, via torch_to_keras). New script
+`eccov4r5_compare_maps.py` (compares the maps of two NetCDF files, variable by variable: Pearson over points finite in both, NaN/inf
+counts, max abs diff; `--pair LABEL|A|B[|SUFFIX_A|SUFFIX_B]`, missing files skipped; no ECCO data read). One-off
+`results/checks/compare_all_maps.slurm` (not in git) lists all the pairs below.
+
+| job | partition, limit | runs | what it answers | waits for |
+|---|---|---|---|---|
+| 3573699 | dev, 1.5 h | check_followup3 (above) | OI speed, dead neurons of all networks, first runs of the new code | (was running) |
+| 3573700 | gpu-a100, 8 h | dead_neurons_seeds, dead_neurons_keras_eager | dead networks: Keras or seed? graph mode / TF32? | 3573699 ok |
+| 3573738 | dev, 1 h | `run_eccov4r5_mini.slurm` (all miniatures, now with the Torch->Keras runs) | every run still works end to end | 3573699 any |
+| 3573740 | dev, 30 min | compare_all_maps (first) | tests `eccov4r5_compare_maps.py` on what exists: Keras500 vs Torch500 LRP maps (old normalization), old OI | 3573738 any |
+| 3573727 | gpu-a100, 24 h | negative_class (saved, 9 lags, n-lrp 300) | the 3544556 rerun (that one timed out at 2 h, log lost) with the layer-by-layer `blocked_share` | - |
+| 3573729 | gpu-a100, 24 h | negative_class_trained (K) | the same on the 500-epoch Keras networks (lags -30, 0, 120 are 100% blocked?) | - |
+| 3573730 | gpu-a100, 24 h | negative_class_torch_trained (T) | the same on the 500-epoch Torch networks | 3573699 ok |
+| 3573731 | gpu-a100, 10 h | LRP_compare_saved_all | published maps vs both libraries, all 9 lags, new normalization (LRP-A1B0-B should match the published file closely) | - |
+| 3573732 | gpu-a100, 6 h | LRP_compare_trained (K) | rerun of 3544562 with the new normalization (no inf/NaN maps) | - |
+| 3573733 | gpu-a100, 6 h | LRP_compare_torch_trained (T) | Torch-trained networks explained by innvestigate and Captum (the owner's "train on Torch, import to Keras, XAI") | 3573699 ok |
+| 3573734 | gpu-a100, 36 h | OI_keras_saved_full | Keras OI, new loss, saved networks, notebook settings (slow: 3544568 needed >6 h for 9 lags) | - |
+| 3573735 | gpu-a100, 4 h | OI_keras, OI_torch, OI_torch_saved_full | new-loss Keras OI lag 0 1000 steps (vs old 3544554), Torch OI with notebook settings | - |
+| 3573736 | gpu-a100, 36 h | OI_keras_trained (K) | rerun of 3544568 (timed out, old loss) with the new loss | - |
+| 3573737 | gpu-a100, 36 h | OI_torch_in_keras_trained (T) | Keras OI of the Torch-trained networks | 3573699 ok |
+| 3573742 | gpu-a100, 30 min | compare_all_maps (final) | all pairs: published vs saved (Keras, Torch); Keras vs Torch per file; Keras500 vs Torch500 (new normalization); OI old vs new loss; OI Keras vs Torch for saved, Keras500, Torch500; Keras500 vs Torch500 OI. Log `results/checks/compare_all_maps.<id>.out`, results `results/checks/maps_<id>/compare_maps.log` and `.json` | all of 3573727-3573737 (any) |
+
+What to look at first when back: `squeue -u $USER`; `sacct -j 3573699,3573700,3573727,3573729,3573730,3573731,3573732,3573733,3573734,3573735,3573736,3573737,3573738,3573740,3573742 -X -o JobID,State,Elapsed,ExitCode`;
+then `results/checks/maps_3573742/compare_maps.log` (one line per map), `results/checks/check_followup3.3573699.out`
+and its `followup3_3573699/oi_speed_*.log`, `dead_inspect.log`; `results/ecco_3573700/dead_neurons_*.log`. If 3573699 failed, the four
+jobs that wait for it `afterok` (3573700, 3573730, 3573733, 3573737) stay pending with `DependencyNeverSatisfied`: fix, `scancel`,
+resubmit them (commands in this table). Not covered by any job: the Keras OI speed-up (needs the 3573699 timings first) and the old
+`~/.vscode-server` deletion.
+
 The three cases the owner asked for, for LRP and for OI: **Keras** (3544560 LRP, 3544568 OI), **Torch** (3544561 LRP, 3544570 OI), **Keras network
 with Torch XAI** (3544562 LRP, 3544569 OI).
 
