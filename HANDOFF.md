@@ -496,6 +496,44 @@ LRP_compare lag 0) with the main code and the branch, then `eccov4r5_compare_map
 LRP_torch (3 epochs, lags 0 60), compare on both trained sets, Keras and Torch OI and negative_class on the Torch networks,
 dead_neurons inspect: all must exit 0 and write `SST_...` and `SST2_...` maps. Exits 1 if anything failed.
 
+The branch was committed (`3fe7653`, "Support several ECCO input fields (--fields, --field-scale), per-field maps") and **pushed by the
+owner** (`origin/multi_field`; my shell has no GitHub credentials: the remote is HTTPS, no `gh`, GitHub not in `known_hosts`, so pushes
+are the owner's). How the worktree works (the owner asked): `git worktree add -b multi_field <dir> HEAD`; the worktree's `.git` is a
+one-line file `gitdir: /home1/07665/shrey911/XAIRT/.git/worktrees/XAIRT_multi_field`; that directory holds its `HEAD`, `index`,
+`gitdir`, `commondir`; commits, branches and remotes are shared with this checkout. `git branch` marks a branch checked out in another
+worktree with `+` (`*` = this folder). `git worktree list` shows both. Remove with `git worktree remove <dir>` (not `rm`; if deleted by
+hand, `git worktree prune`). A branch can be checked out in only one worktree at a time.
+
+### State at the end of 2026-11-11 (00:55), the owner away for a week or more
+
+All 16 jobs pending, none started, none failed: gpu-a100 3573700, 3573727, 3573729-3573737, 3573742 (final map comparison, after all),
+3573843 (multi-field test, from the worktree); gpu-a100-dev 3573738 (mini), 3573740 (maps, first), 3573842 (OI profile). gpu-a100 had
+about 430 pending jobs on 2026-11-01 and ours waited 1-6 days then, so expect days.
+
+**Order of work when the owner is back:**
+1. `sacct` of all ids (command above); for any FAILED/TIMEOUT read `results/logs/XAIRT_ecco.<id>.out`, the `<run>.log` in
+   `results/ecco_<id>/`, fix, resubmit. Jobs blocked by a failed `afterok` show `DependencyNeverSatisfied`.
+2. Keras OI speed: `results/checks/oi_profile_3573842/prof_pf{50,100000}.txt`. If `model.predict` (or anything outside the gradient)
+   dominates, fix `optimal_input` in `eccov4r5_OI_keras.py` (e.g. print with `model(x)` instead of `model.predict`, keep x as a tensor,
+   or run the loop in one `tf.function`; `check_oi_speed.py` showed all these give the same result). Do it **after** the queued Keras OI
+   jobs (3573734, 3573735, 3573736, 3573737) have started, or on the `multi_field` worktree.
+3. Dead networks: `results/ecco_3573700/dead_neurons_seeds.log` and `dead_neurons_keras_eager.log` (per network: dead neurons,
+   constant/blocked shares). Seed 42 should reproduce 3544560/61. Keras dead at other seeds too and Torch not -> a Keras training issue
+   (then graph mode / TF32 via the eager run); dead for some seeds of both -> chance (8 neurons, L2 10). Also
+   `results/checks/followup3_3573699/dead_inspect.log` (already there, not read yet: dead neurons of saved, keras500, torch500).
+4. Maps: `results/checks/maps_3573742/compare_maps.log`. Key numbers: published vs saved (new normalization) for LRP-A1B0-B (should be
+   ~1; if not, the normalization or the rules changed the published maps); OI old vs new loss; Keras vs Torch everywhere (should be ~1
+   for the same network); Keras500 vs Torch500 (the networks differ, so this measures how robust the maps are to the training).
+5. Negative class: `results/ecco_357372{7,9}/negative_class*.log`, `results/ecco_3573730/...`: `blocked_share` per lag and class for
+   saved, Keras500, Torch500 networks.
+6. Multi-field: `<worktree>/scripts_TomsQoI/results/checks/test_multi_field.3573843.out`; if passed and the queued jobs have started,
+   merge `multi_field` and remove the worktree.
+7. Open owner decisions: what to do about dead-path networks (after 3); whether the draft's OI needs the loss note (after 4); and the
+   still-open negative-class remedy (the logit-difference idea did not work).
+8. Leftovers: delete the old `~/.vscode-server` on /home1 (about 1.7 GB) once no process runs from it (`ps -u $USER -o args | grep
+   /home1/07665/shrey911/.vscode-server` empty); reinstall VS Code extensions on the new /work server if not done (Python, Pylance,
+   Python Debugger, Python Environments, C/C++, Fortran linter).
+
 The three cases the owner asked for, for LRP and for OI: **Keras** (3544560 LRP, 3544568 OI), **Torch** (3544561 LRP, 3544570 OI), **Keras network
 with Torch XAI** (3544562 LRP, 3544569 OI).
 
