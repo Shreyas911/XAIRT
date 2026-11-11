@@ -1,6 +1,6 @@
 # Handoff: XAIRT, the notebook-to-script conversion and the LRP research
 
-Last updated at the end of the session of **2026-10-31**. Earlier session: 2026-09-20 (commit `31a3fc9`, its notes are condensed in section 12).
+Last updated at the end of the session of **2026-10-31**; continued on **2026-11-01** and **2026-11-10** (same session: the miniature test job, the follow-up checks and the results of all queued jobs, section 3). Earlier session: 2026-09-20 (commit `31a3fc9`, its notes are condensed in section 12).
 Read the README for what each script does; read this file for the state of things, what was found, what is running, and what is open.
 
 ---
@@ -133,6 +133,17 @@ go nowhere and the job fails. SLURM does not create the log directory, which is 
   - `KERAS_MODELS` / `TORCH_MODELS` are passed with `--export=ALL,KERAS_MODELS=$PWD/scripts_TomsQoI/results/ecco_<id>/LRP_keras/models`. A run
     that needs one and does not get it prints a message and is skipped (the `needs` function in the script).
   - Output: `scripts_TomsQoI/results/ecco_<jobid>/<name>.log` and `scripts_TomsQoI/results/ecco_<jobid>/<name>/` (the script's `--out-dir`).
+- `scripts_TomsQoI/run_eccov4r5_mini.slurm` (added 2026-11-01; `gpu-a100-dev`, 1 h; no arguments): **quick test of every
+  `run_eccov4r5.slurm` run before queuing the long ones.** Same scripts and options, small settings: `--lags 0 60`, `--epochs 3`,
+  `--oi-iters 20 --print-freq 10`, `--n-lrp 20` (`LRP_compare` on the saved models: lag 0 only). Runs, in order: `OI_keras`, `OI_torch`,
+  `LRP_compare`, `negative_class`, `LRP_keras`, `LRP_torch`, then `LRP_compare_trained`, `OI_keras_trained`, `OI_keras_in_torch_trained`,
+  `OI_torch_trained` on the 3-epoch networks the job just trained (`$RUN_DIR/LRP_{keras,torch}/models`), which tests the KERAS_MODELS /
+  TORCH_MODELS hand-off of the real jobs. A failing script does not stop the others; the job log prints `<name>: exit <code> (<s> s)` and, on
+  failure, the last 5 lines of `<name>.log`. Output: `scripts_TomsQoI/results/mini_<jobid>/`, log `results/logs/XAIRT_mini.<jobid>.out`.
+  Why: the dev queue allows only **one running job per user**, so all the miniatures are in one job; and the real `gpu-a100` jobs wait long
+  (on 2026-11-01, 265 of 434 pending jobs had higher priority), so a first-run error found there costs a day. **When adding a run to
+  `run_eccov4r5.slurm`, add its miniature here too.** The first run of it (job 3545828, 2026-11-01) was submitted from a scratch copy with
+  the output in `/work/07665/shrey911/ls6/XAIRT_mini/` (`mini.3545828.out`, `run_3545828/`) instead of `results/`; see section 3.
 - `env/create_env.slurm` (`gpu-a100`, 20 min): builds the env if it does not exist (`mamba env create -f env/XAIRT.yaml`, about 7 min), otherwise
   only checks it (versions, TF GPUs, torch CUDA, `import XAIRT`). Now uses the `PATH`/`LD_LIBRARY_PATH` way of section 2.3 instead of `mamba run`.
 - Each job's `.out` in `scripts_TomsQoI/results/logs/` ends with one line per run: `<name>: exit <code> (<seconds> s)` and `done`.
@@ -168,13 +179,227 @@ State when the session ended: all pending (none had started). Check with `squeue
 | 3544554 | gpu-a100, 2 h | `OI_keras OI_torch`: ECCO OI, lag 0, both kinds, 1000 steps | saved notebook models (Torch: copied with `keras_to_torch`) | - |
 | 3544555 | gpu-a100, 2 h | `LRP_compare`: Keras vs Torch on the same network, LRP-A1B0-B and LRP-A1B0, lag 0 | saved notebook models | - |
 | 3544556 | gpu-a100, 2 h | `negative_class`: the all-zero relevance investigation, all 9 lags | saved notebook models | - |
-| 3544567 | gpu-a100-dev, 20 min | `run_easy_tests.slurm fake_pos LRP_torch`: test of the `Trainer.py` refactor (section 7) | fake data | - |
+| 3544567 | gpu-a100-dev, 20 min | `run_easy_tests.slurm fake_pos LRP_torch`: test of the `Trainer.py` refactor (section 7). **Done, passed** (both exit 0, numbers as before) | fake data | - |
 | 3544560 | gpu-a100, 12 h | `LRP_keras`: train 500 epochs and explain, all 9 lags | trained in this job (TF32 on) | - |
 | 3544561 | gpu-a100, 12 h | `LRP_torch`: the same with Torch and Captum (innvestigate's rules) | trained in this job | 3544567 `afterok` |
 | 3544562 | gpu-a100, 6 h | `LRP_compare_trained`: the networks of 3544560 explained by innvestigate and Captum, all 9 lags | from 3544560 | 3544560 `afterok` |
 | 3544568 | gpu-a100, 6 h | `OI_keras_trained`: OI, notebook settings | from 3544560 | 3544560 `afterok` |
 | 3544569 | gpu-a100, 6 h | `OI_keras_in_torch_trained`: the same, Keras networks copied into Torch | from 3544560 | 3544560 `afterok` |
 | 3544570 | gpu-a100, 6 h | `OI_torch_trained`: the same, Torch (`--source saved-torch`) | from 3544561 | 3544561 `afterok` |
+
+**Added 2026-11-01:** none of the jobs above had started by 2026-11-01 (all `gpu-a100` nodes busy, 434 pending jobs, 265 with higher
+priority than ours). So **job 3545828** (`gpu-a100-dev`, 1 h) runs the miniature of all of them (`run_eccov4r5_mini.slurm`, section 2.5), to find
+first-run errors before the real jobs get a node. Log: `/work/07665/shrey911/ls6/XAIRT_mini/mini.3545828.out`; per-run logs and outputs:
+`/work/07665/shrey911/ls6/XAIRT_mini/run_3545828/`. If a miniature fails, fix the script before its real job starts (the real jobs read the
+scripts when they start, not when submitted).
+
+**Result of 3545828 (ran 2026-11-01 on c301-003, about 20 min): 10 of 11 exit 0, `negative_class` exit 1.**
+
+| run | exit, time | what it showed |
+|---|---|---|
+| `OI_keras` | 0, 308 s (mostly the first data load) | PNGs and NetCDFs written, maps look right (`plot_maps` works). Colorbars much taller than the maps (layout only). Also creates an empty `models/` in its out-dir (harmless) |
+| `OI_torch` | 0, 33 s | Same start as Keras to 7 digits (iter 0: lag 0 pos 0.81718, lag 60 pos 0.70839, neg 0.98041 / 0.98175), **but the trajectories differ**: after 20 steps lag 60 pos Keras 0.8385 vs Torch 0.8567, lag 0 pos 0.8954 vs 0.8938, lag 0 neg 0.98053 vs 0.98045. Same update rule (`x - eta*grad`, BCE), so the gradients differ, not by rounding. **Explained (from the Keras 2.9 source, not yet confirmed numerically):** Keras' `softmax` stores its input logits on its output (`output._keras_logits = x`, `keras/activations.py:91`), and `backend.binary_crossentropy` uses them whenever present (`keras/backend.py:5272-5283`): `tf.nn.sigmoid_cross_entropy_with_logits(target, z)`. So **Keras' OI loss is the mean over the 2 outputs of BCE(sigmoid(z_k), t_k)**, for desired [1,0]: ½[softplus(-z0) + softplus(z1)], pushing z0 up and z1 down separately. **Torch's `BCELoss` works on the softmax probabilities**: ½[-log p0 - log(1-p1)] = -log sigmoid(z0 - z1), which depends only on the logit difference. Same forward pass (identical iter 0), different loss, different gradient. **The notebook's published OI used the Keras one.** Training is not affected: the ECCO scripts train with `categorical_crossentropy` (`eccov4r5_common.py:38`), where Keras' logits shortcut is correct and Torch uses `_softmax_crossentropy`. **Owner decision**: either make Torch's OI reproduce Keras (`BCEWithLogitsLoss` on the pre-softmax logits, i.e. `model_wo_softmax_torch`) or make both use the probabilities (Keras: `BinaryCrossentropy` on an output without `_keras_logits`, e.g. a Lambda softmax or `tf.identity` of the output). Job 3544554 (1000 steps) shows how much the final maps differ |
+| `LRP_compare` (saved models, lag 0) | 0, 140 s | **innvestigate vs Captum on ECCO: identical.** max prob diff 2.09e-06; pos (n 4733) and neg (n 5770), LRP-A1B0-B and LRP-A1B0: pearson_mean, pearson_min, cosine_mean, pearson_mean_map all 1.0000 (pearson_min 0.9999999999995) |
+| `negative_class` | **1**, 27 s | crashed in `difference_model`: `RuntimeError: Random ops require a seed to be set when determinism is enabled` (Keras' random initializer of the new Dense layers, graph mode + op determinism). **Fixed**: zero initializers (weights are set right after). Fix tested by 3545869, see below. Before the crash it showed the published file has no NaN at wet points (section 4.4 correction) |
+| `LRP_keras` (3 epochs, lags 0 60) | 0, 105 s | models `model{0,60}_noL1.h5`, all 6 PNGs, metrics, NetCDF. Acc/F1: lag 0 0.733/0.761, lag 60 0.790/0.809. All-zero relevance over **all** explained samples: neg 34.8% (1662) at lag 0, 2.4% (122) at lag 60, both methods; pos 0 |
+| `LRP_torch` (3 epochs) | 0, 208 s | models `.pt`, all 6 PNGs, metrics, NetCDF. Acc/F1: lag 0 0.771/0.811, lag 60 0.793/0.815. All-zero: neg 0 at lag 0, 29.5% (1502) at lag 60; pos 0. The share depends on the network |
+| `LRP_compare_trained` (lags 0 60) | 0, 202 s | prob diff 8.3e-07 / 1.0e-06; all per-sample numbers 1.0000, **but at lag 60 `pearson_mean_map` = NaN for LRP-A1B0 (pos and neg): the Torch mean map is NaN at every wet point** (ncdump: 105248/105304 of 105300 points fill, vs 73493 = land for Keras). So some Torch samples have non-finite relevance; the nan functions hid them. Being checked by 3545869 |
+| `OI_keras_trained`, `OI_keras_in_torch_trained`, `OI_torch_trained` | 0, 35 / 28 / 29 s | the KERAS_MODELS / TORCH_MODELS hand-off works, `--source saved-torch` works |
+
+Changes made because of it (2026-11-01, untested until 3545869 finishes):
+- `eccov4r5_negative_class_LRP.py` `difference_model`: `kernel_initializer`/`bias_initializer = 'zeros'`.
+- `eccov4r5_LRP_A1B0_compare.py` `agreement`: also reports, per class and method, `keras` / `torch` `{n_all_zero, n_nonfinite}` and
+  `n_pearson_nan`, since the nan functions hid the Torch NaN samples; the print line handles non-float values.
+
+**Follow-up job 3545869** (`gpu-a100-dev`, 45 min, `--dependency=afterany:3545828`, script `scripts_TomsQoI/results/checks/check_followup.slurm`,
+not in git; log `scripts_TomsQoI/results/checks/check_followup.3545869.out`, run dir `results/checks/followup_3545869/`): runs
+`results/checks/check_torch_nan_map.py` (lag 60 of the mini Keras network: raw and normalized relevance of both libraries, how many samples are
+non-finite in each, and for the first 5 bad Torch samples their logits and Keras sums), the compare script with the new counts on that network,
+and the fixed `negative_class` on the saved models (lags 0 60, `--n-lrp 20`).
+
+**Result of 3545869 (2026-11-01): all three exit 0** (362 / 117 / 42 s). Logs in `results/checks/followup_3545869/`.
+- **The Torch NaN map is not a Torch bug.** Lag 60, mini Keras network: raw relevance Keras vs Torch max abs diff 1.4e-09 to 1.4e-06 (pos n
+  3864, neg n 4989, both methods), normalized 3.7e-06 to 1.7e-05. Non-finite samples: pos 0 and 0; neg **122 in Keras and 122 in Torch**, the
+  same samples, the all-zero ones (normalized 0/0 = NaN, 31811 NaN = every wet point, logits e.g. [-0.360, 0.193]). The new counts of the
+  compare script say the same (`n_nonfinite` 122/122, `n_all_zero` 0/0 after normalization, `n_pearson_nan` 122) and it still gets
+  `pearson_mean_map` NaN for LRP-A1B0 pos and neg (not for A1B0-B). So the NaN comes from `normalized_mean_relevance`
+  (`eccov4r5_common.py:293`, divides each sample by its **max**, not its max abs). Hypothesis being checked by 3545911: with the bias kept
+  (A1B0, not A1B0-B), a sample whose explained logit is negative gets relevance <= 0; its max is exactly 0 in one library (-> -inf / NaN)
+  and a tiny rounding value in the other (-> huge finite values, wrong too). The earlier check found no negative explained logit for the
+  saved models, but the 500-epoch networks may have some.
+- **The negative-class mechanism of section 4.4 is wrong as stated.** Saved models (all samples, forward pass): `no_positive_contribution_share`
+  = 0.000 at lags 0 and 60 for both classes, yet LRP on the first 20 lag 0 neg samples gave `all_zero_share` 1.000 for A1B0-B, A1B0, **and
+  the logit-difference model** (so that remedy does not help). Lag 60 neg first 20: 0.000. Output bias: +0.187 (lag 0) / +0.194 (lag 60)
+  for neg, -0.187 / -0.194 for pos; bias share of the logit median 0.10. Active neurons median (hidden layers 1, 2): neg [3, 5] / [3, 4],
+  pos [5, 5] / [5, 7]. So the relevance is blocked in a lower layer. **Changed (2026-11-01)**: `mechanism()` in
+  `eccov4r5_negative_class_LRP.py` now also traces which neurons carry A1B0 relevance down through every hidden layer (a neuron carries it
+  if it has a positive contribution h_i w_ij > 0 into a carrying neuron above) and reports `blocked_share` (no carrying neuron in some
+  layer), `blocked_share_by_layer`, `relevance_neurons_median`, `blocked_share_lrp_samples`. Expected: `blocked_share_lrp_samples` = the
+  all-zero share of the same samples. Tested by 3545911.
+
+**Follow-up job 3545911** (`gpu-a100-dev`, `results/checks/check_followup2.slurm`, log `results/checks/check_followup2.3545911.out`, run dir
+`results/checks/followup2_3545911/`): `check_max_zero.py` (the max == 0 hypothesis, lag 60 of the mini network), the updated `negative_class`
+on the saved models (lags 0 60, `--n-lrp 100`) and on the mini network.
+
+**Result of 3545911 (ran 2026-11-01, all exit 0, read 2026-11-10).**
+- `check_max_zero.py`, lag 60 of the mini Keras network, LRP-A1B0 (bias kept), normalized: pos n 3864, explained logit < 0 in 98; 96 samples
+  have max relevance **exactly 0 in both libraries** (all of them with a negative logit; none with 0 < max < 1e-6). neg n 4989: logit < 0
+  in 2479, max == 0 in 2465. The mean map of `normalized_mean_relevance` is then **inf at all 31811 wet points in Keras, NaN in Torch**
+  (31755 NaN + 56 inf for pos). **Hypothesis confirmed**: a negative explained logit gives relevance <= 0, the per-sample division by the max
+  (0) breaks the whole mean map in both libraries (the sign of the zeros differs, so Keras gets inf and Torch NaN). Only LRP-A1B0 (bias kept);
+  LRP-A1B0-B (IB) is not affected. The saved notebook models have no negative explained logit (section 4.3), so the published maps are fine.
+- `negative_class` with the layer-by-layer trace, **the mechanism is confirmed**:
+
+  | network | lag, class | n | blocked_share (all samples) | blocked in layer [h1, h2] | blocked, first 100 | all-zero LRP, first 100 (A1B0-B, A1B0) | difference model all-zero |
+  |---|---|---|---|---|---|---|---|
+  | saved | 0 neg | 5770 | **0.255** | [0.255, 0.0] | 1.000 | 1.000, 1.000 | 1.000 |
+  | saved | 60 neg | 5816 | **0.216** | [0.216, 0.0] | 0.000 | 0.000, 0.000 | 0.000 |
+  | mini (3 ep.) | 0 neg | 4777 | **0.348** | [0.348, 0.345] | 0.000 | 0.000, 0.000 | 1.000 |
+  | mini (3 ep.) | 60 neg | 4989 | **0.024** | [0.024, 0.021] | 0.000 | 0.000, 0.000 | 0.000 |
+  | both | pos, 0 and 60 | | 0.000 | | | 0 | 0 |
+
+  `no_positive_contribution_share` (only the last layer, the first hypothesis) is 0.000 for the saved models: the block is in **hidden layer 1**
+  (no neuron of h1 has a positive contribution h_i w_ij > 0 into the neurons of h2 that carry relevance; median number of carrying neurons
+  [1, 1] for saved neg vs [4-5, 4-7] for pos). The all-sample blocked shares equal the all-sample all-zero shares that LRP itself printed:
+  mini lag 0 neg 0.348 = 1662/4777, lag 60 0.024 = 122/4989 (3545828), saved lag 0 neg 0.255 = 1472/5770 (`n_nonfinite` of 3544555). So
+  the forward-pass trace predicts exactly which samples LRP leaves at zero. The logit-difference remedy does **not** help (all-zero 1.000
+  where the original is 1.000, and on the mini lag 0 it makes 100 samples all-zero that were not), so it is not the fix.
+  Output bias of the saved models: neg +0.187 / +0.194, pos -0.187 / -0.194 (lags 0 / 60).
+
+### Results of the real jobs (all finished between 2026-11-02 and 2026-11-07; read 2026-11-10)
+
+| job | state | time | notes |
+|---|---|---|---|
+| 3544554 OI saved lag 0 | COMPLETED | OI_keras 1748 s, OI_torch 76 s | Keras pos 0.817 -> 0.99823 after 1000 steps, Torch 0.99123; neg 0.98041 -> Keras 0.98513, Torch 0.98207 (the loss difference of the OI row above) |
+| 3544555 LRP_compare saved lag 0 | COMPLETED | 1372 s | all Pearson 1.0000, prob diff 2.09e-06; neg: **1472 non-finite (all-zero) samples of 5770 in both** libraries (25.5%) |
+| 3544556 negative_class | **TIMEOUT** (2 h) | | `negative_class.log` **empty**: Python block-buffers stdout to a file and the kill lost it. Not known how far it got. **Fixed 2026-11-10**: `run()` in `run_eccov4r5.slurm`, `run_eccov4r5_mini.slurm`, `run_easy_tests.slurm` now uses `python -u`. Needs a resubmit with a longer `-t` (6 h) |
+| 3544560 LRP_keras 500 ep. | COMPLETED | 2500 s | metrics below |
+| 3544561 LRP_torch 500 ep. | COMPLETED | 2715 s | metrics below |
+| 3544562 LRP_compare_trained | COMPLETED | 1747 s | all lags: prob diff 1.2-2.3e-06, Pearson 1.0000 wherever defined; non-finite samples identical in both libraries (see table below); `pearson_mean_map` NaN where all samples are non-finite |
+| 3544568 OI_keras_trained | **TIMEOUT** (6 h) | | finished lags -60..150, killed during lag 180. Keras OI is slow (about 0.12 s/step here, 0.87 s/step in 3544554) vs Torch (271 s for all 9 lags x 2 kinds x 10000 steps). Lag 180 needs a rerun, or Keras OI made faster |
+| 3544569 OI_keras_in_torch_trained | COMPLETED | 290 s | |
+| 3544570 OI_torch_trained | COMPLETED | 271 s | |
+
+**Retrained networks, accuracy / F1 and all-zero LRP share (both methods give the same count) per lag** (from `metrics_<b>.json` and the
+"Number of all-zero samples" lines of `ecco_3544560/LRP_keras.log`, `ecco_3544561/LRP_torch.log`):
+
+| lag | Keras acc / F1 | Keras all-zero pos / neg | Torch acc / F1 | Torch all-zero pos / neg |
+|---|---|---|---|---|
+| -60 | 0.918 / 0.926 | 0 / 211 (3.7%) | 0.919 / 0.927 | 0 / 74 (1.3%) |
+| -30 | 0.935 / 0.941 | 0 / **5832 (100%)** | 0.915 / 0.921 | 0 / 18 (0.3%) |
+| 0 | 0.936 / 0.942 | 0 / **5836 (100%)** | 0.932 / 0.938 | 0 / 0 |
+| 30 | 0.940 / 0.945 | 0 / 0 | 0.932 / 0.939 | 0 / 1570 (26.8%) |
+| 60 | 0.926 / 0.933 | 0 / 58 (1.0%) | 0.926 / 0.933 | 0 / 1078 (18.6%) |
+| 90 | 0.906 / 0.915 | 0 / 0 | 0.906 / 0.915 | 0 / 0 |
+| 120 | 0.911 / 0.919 | **4464 (100%) / 5688 (100%)** | 0.913 / 0.920 | 0 / 29 (0.5%) |
+| 150 | 0.943 / 0.947 | 0 / 6 (0.1%) | 0.946 / 0.950 | 31 (0.6%) / 0 |
+| 180 | 0.937 / 0.942 | 53 (1.1%) / 0 | 0.933 / 0.939 | 0 / 0 |
+
+Accuracy of the two backends agrees within 0.02 at every lag. **Three Keras networks (lags -30, 0 neg; 120 both classes) give no LRP
+relevance at all for a whole class**: the relevance is blocked in a hidden layer for every sample, although they classify at 91-94%. The
+OI confirms it is the network, not LRP: for exactly those cases the OI does not move in 10000 steps (zero input gradient) in Keras and in
+the same networks run by Torch (`OI_keras_trained` / `OI_keras_in_torch_trained`: lag -30 neg 0.01707 -> 0.01707, lag 0 neg 0.05190 ->
+0.05190, lag 120 neg 0.01952 -> 0.01952; lag 120 pos stops at 0.93305 in both). So for those classes the explained logit does not depend
+on the input near the samples (dead ReLU paths: the class is decided by the other logit and the bias). The Torch-trained networks do not
+show it (OI moves at every lag). Why Keras training produces them and Torch not (initializers: Keras glorot_uniform vs Torch kaiming_uniform;
+optimizer details) is open. The published notebook networks have the milder version (25.5% at lag 0, 21.6% at lag 60).
+
+OI end predictions (10000 steps, pos target [1,0] / neg target [0,1]): Keras-trained in Keras reaches 0.9999+ (pos) and 0.9993-0.9997
+(neg, where it moves); the same networks in Torch reach 0.998-0.9995 / 0.993-0.996; Torch-trained 0.996-0.999 / 0.990-0.997. The
+Keras vs Keras-in-Torch difference is the loss difference (OI row of the 3545828 table). The maps themselves have not been compared yet.
+
+**To do next (2026-11-10)**: resubmit `negative_class` (`-t 06:00:00`, now unbuffered); rerun `OI_keras_trained` lag 180 or speed up Keras
+OI; compare the OI and LRP maps of the three cases numerically (a job, no Python on the login node); write the script that compares the two
+separately trained runs; owner decision still open: what to do about the dead-path networks (retrain with another seed / initializer, or
+report it; my recommendation: first find why Keras training makes them and Torch not, then retrain).
+
+**Owner decisions of 2026-11-10/11 and the changes made:**
+- **OI loss: "the more principled thing"**, BCE of the softmax probabilities in both backends. The owner first asked whether the two losses
+  are equivalent: they are not. With 2 classes Torch's BCE of the probabilities is -log sigmoid(z0 - z1) (depends only on the logit
+  difference, gradient along grad(z0 - z1)); Keras' was ½[softplus(-z0) + softplus(z1)] (gradient -½(1-sigmoid(z0)) grad z0 +
+  ½ sigmoid(z1) grad z1, another direction unless z1 = -z0). Change: `eccov4r5_OI_keras.py` `optimal_input` uses
+  `keras_bce(y_true, tf.identity(y_pred))` (tf.identity drops the cached `_keras_logits`, so Keras clips the probabilities to
+  [1e-7, 1-1e-7] and takes logs, as BCELoss, which clamps the log at -100). Torch unchanged. **Consequence: every Keras OI so far
+  (3544554, 3544568, the mini runs, and the notebooks' published OI) used the old loss; they need rerunning.** Test: dev job **3573687**
+  (`results/checks/check_oi_loss.slurm`, saved models, lags 0 60, both kinds, 200 steps; log `results/checks/check_oi_loss.3573687.out`,
+  run dir `results/checks/oi_loss_3573687/`): Keras and Torch predictions should now agree at every printed step to about 1e-5.
+  **Result (2026-11-11): passed.** Both exit 0 (Keras 412 s, Torch 35 s). At every printed step (0, 50, ..., 200), lags 0 and 60, both
+  kinds, the Keras and Torch predictions agree to about 1e-7 (e.g. lag 60 pos step 200: 0.97754353 both; before the fix 20 steps already
+  differed by 0.02). The losses are now the same.
+- **VS Code server moved to /work (2026-11-11)**: the owner set `"remote.SSH.serverInstallPath": {"ls6.tacc.utexas.edu":
+  "/work/07665/shrey911/ls6"}` on the laptop (ssh host alias `ls6.tacc.utexas.edu`). The new server runs from
+  `/work/07665/shrey911/ls6/.vscode-server` and this Claude Code session resumed (same transcript `3cf0f372-...jsonl`). The Machine
+  settings file was copied there. The old `~/.vscode-server` (about 1.7 GB) can be deleted once no process runs from it.
+- **Map normalization: divide by the max abs** (owner: "I also like dividing by max absolute value"). Change: `normalized_mean_relevance`
+  in `eccov4r5_common.py` (used by the LRP scripts' maps and NetCDF, the compare script and `negative_class`). Note that the scripts
+  already normalize each sample by `NORMALIZE = MaxAbs` in `XAIKeras`/`XAITorch` before this, so for them the division is by 1 except
+  for all-zero samples (still NaN, left out). Not rerun yet; the LRP-A1B0 maps of the 500-epoch runs at the lags with a negative explained
+  logit are broken in the existing output (inf / NaN) and need the LRP scripts rerun.
+- **/home1 quota**: it was at 98% (9.8 of 10 GB, mostly `~/.vscode-server` 5.8 GB and `~/.cache/vscode-cpptools` 2.5 GB), and sbatch
+  refuses to submit above 90%. The owner said **not to touch anything of VS Code** (this session runs in it). Instead the 1.1 GB desktop
+  trash `~/.local/share/Trash` (the owner's 2024 LRP NetCDF results, e.g. `LRP_A1B0_newAnomalies_allSignsFlipped.nc`,
+  `LRP_A1B0_IB_B_3sigma_...nc`, `LRP_Z.nc`; maybe useful for the negative-class question) was **moved** (copied, verified with
+  `diff -rq`, then removed) to `/work/07665/shrey911/ls6/home_trash_backup_2026-11-10/`. /home1 now 8.8 GB (87.6%): little headroom.
+  **2026-11-11, with the owner's approval**: deleted the unused VS Code items (a 2.6 GB C/C++ symbol database of April 2024 in
+  `~/.cache/vscode-cpptools`, four older servers in `~/.vscode-server/cli/servers` (kept the running `Stable-dcd3ad6e...`), the legacy
+  `~/.vscode-server/bin/` of 2024, `data/CachedExtensionVSIXs`, four old `code-*` launchers). /home1 now **2.9 GB (28.7%)**. The C/C++
+  extension stays (the Fortran linter needs it); its caches now go to `/work/07665/shrey911/ls6/.cache/vscode-cpptools`, capped at
+  512 MB, via `~/.vscode-server/data/Machine/settings.json` (new). Suggested to the owner, on the laptop (I cannot change it):
+  `"remote.SSH.serverInstallPath": { "<ssh host alias>": "/work/07665/shrey911/ls6" }` so future servers install on /work (the
+  launcher keeps the last 5 versions, about 650 MB each), and optionally `"update.mode": "manual"`. If that is done, copy the
+  Machine settings file to `/work/07665/shrey911/ls6/.vscode-server/data/Machine/`. Claude Code sessions are in `~/.claude/projects/`
+  and are not affected by the install path.
+
+### 2026-11-11: dead Keras networks, Torch -> Keras, Keras OI speed (owner's requests)
+
+The owner: "Keras networks that are dead seem suspicious. Investigate that. Also, have more code in the repo that trains on Torch and
+imports to Keras and uses XAI. Will be good to compare." and "Also investigate why Keras OI is slower than Torch OI."
+
+**What the logs already say (read on the login node, no Python):**
+- Not an early checkpoint: in `ecco_3544560/LRP_keras.log` the last "val_loss improved" is at epoch 468-500 for every lag (-30: 468,
+  120: 475, the others 489-500). So the training had not converged at 500 epochs either.
+- The dead Keras networks trained worse: final Keras val_loss per lag -60..180: 0.3007, **0.3039**, **0.3174**, 0.2781, 0.2927, 0.2947,
+  **0.3560**, 0.2925, 0.2896 (bold = the dead ones; lag 120, both classes dead, is clearly the worst). Torch at epoch 490: 0.281-0.307 at
+  every lag. First epoch: Keras val_loss 0.99-1.87, Torch 1.03-2.34, train loss about 8.5 (the L2 penalty 10 of the first layer dominates).
+- Same architecture and settings in both backends: 8-8-2 ReLU/softmax, He-normal (Torch truncates at 2 std with the Keras constant,
+  `Trainer.py:371-376`), zero biases, SGD lr 0.01 Nesterov momentum 0.9, `step_decay` (halves every 50 epochs), batch 128, class
+  weights, L2 10 (layer 1, weights and biases) / 0.01 (layers 2, 3), best val_loss checkpoint. Different: the random streams (init,
+  shuffling), and **Keras trains in TF1 graph mode** (the Keras LRP script calls `tf.compat.v1.disable_eager_execution()` for innvestigate
+  before training; the log shows the v1 format "7233/7233 - 0s - loss ... - 58us/sample") **with TF32 on** (not disabled in that script).
+- Hypothesis: with only 8 neurons in layer 1 and a strong L2 on them, some ReLUs die early and never recover; whether that is chance or
+  systematic for Keras is what the seed study below answers.
+
+**New code (2026-11-11, untested until 3573699 runs):**
+- `src/XAIRT/utils.py`: `torch_to_keras(model: nn.Sequential) -> keras Model`, the reverse of `keras_to_torch` (Linear + optional
+  ReLU/Sigmoid/Tanh/Softmax(dim -1 or 1) modules -> Dense layers with the activation; weights transposed; zero initializers, set right
+  after, for the same "Random ops require a seed" reason as `difference_model`). Exported in `__all__`.
+- `eccov4r5_LRP_A1B0_keras.py` `make_get_model`: new `--source saved-torch` (load `model{lag}_noL1.pt` with
+  `TrainTorchFullyConnectedNN.load_saved_model`, then `torch_to_keras`, then the same `saved_` layer renaming). Added to the sources of
+  `eccov4r5_OI_keras.py`, `eccov4r5_analyze_keras.py`, `eccov4r5_LRP_A1B0_compare.py` (Torch-trained network explained by both libraries;
+  the Torch side is `keras_to_torch` of the Keras copy, an exact round trip; docstring updated) and `eccov4r5_negative_class_LRP.py`.
+  `--source` help text in `eccov4r5_common.py` updated.
+- `run_eccov4r5.slurm`: new runs `LRP_compare_torch_trained`, `OI_torch_in_keras_trained` (need `TORCH_MODELS`), `dead_neurons_seeds`,
+  `dead_neurons_keras_eager`. `run_eccov4r5_mini.slurm`: miniatures of the first two.
+- New `eccov4r5_dead_neurons.py` (docstring has the details): `--inspect LABEL=DIR` (existing .h5 / .pt networks) or train mode
+  (`--backends --seeds --epochs-list --lags`, trained with each backend's `make_train_fn`, as the LRP scripts). Per network: per-neuron
+  active share of the samples, `n_dead` per layer, first-layer biases and weight norms, and per class `constant_share` (correct samples
+  whose logit has no active path from the input: zero input gradient, so no OI movement and zero relevance for any rule) and
+  `blocked_share` (A1B0, `mechanism()` of the negative-class script). `--keras-eager`, `--no-tf32` train Keras differently from the LRP
+  script. Writes `dead_neurons.json` (after every trained network, so a timeout keeps what was done).
+- One-off `results/checks/check_oi_speed.py` (not in git): times 200 OI steps of the saved lag 0 network (pos), Keras as the script does it
+  (one `tf.function` call per step from Python with a numpy round trip), with the tensors kept on the device, and the whole loop in one
+  graph, each on GPU and CPU (a new `tf.function` per device, since a trace keeps its device placement), plus Torch on CPU (as
+  `eccov4r5_OI_torch.py`, which **never moves to the GPU**) and GPU; `--mode script` (op determinism on, as the script) and
+  `--mode nodeterminism`. Prints ms/step and the max difference of the final input from the script's way. Suspects: per-step Python
+  dispatch + host<->GPU copies on a network this small (where the CPU wins), and the deterministic kernels.
+
+**Jobs (2026-11-11):**
+
+| job | partition | what | waits for |
+|---|---|---|---|
+| 3573687 | gpu-a100-dev, 30 min | OI loss check (above) | - |
+| 3573699 | gpu-a100-dev, 1.5 h | `results/checks/check_followup3.slurm`: `check_oi_speed.py` both modes; `dead_neurons --inspect` of saved, keras500 (3544560), torch500 (3544561) at all 9 lags and of the mini 3-epoch networks; `dead_neurons` train mode test (3 epochs, lag 0, both backends); `LRP_compare_torch_trained`, `OI_torch_in_keras_trained`, `OI_torch_trained` on the mini Torch networks (lags 0 60, 20 OI steps: Keras and Torch OI of the same Torch network, which with the new loss should agree). **Exits 1 if any run fails.** Log `results/checks/check_followup3.<id>.out`, run dir `results/checks/followup3_<id>/` | 3573687 `afterany` |
+| 3573700 | gpu-a100, 8 h | `run_eccov4r5.slurm dead_neurons_seeds dead_neurons_keras_eager`: Keras and Torch, seeds 42 43 44, lags -30 0 30 60 120, 500 epochs; then Keras eager + no TF32, seeds 42 43 44, lags -30 0 120. Seed 42 should reproduce 3544560/3544561 (a check of determinism). About 4 h estimated. Output `results/ecco_3573700/dead_neurons_*/dead_neurons.json` | 3573699 `afterok` (if 3573699 fails it stays `DependencyNeverSatisfied`: fix, `scancel`, resubmit) |
 
 The three cases the owner asked for, for LRP and for OI: **Keras** (3544560 LRP, 3544568 OI), **Torch** (3544561 LRP, 3544570 OI), **Keras network
 with Torch XAI** (3544562 LRP, 3544569 OI).
@@ -189,7 +414,8 @@ models directory of the new run).
 
 What to check, in order, and what to expect:
 
-1. **3544567** (`results/logs/XAIRT_easy.3544567.out`): both runs `exit 0`. If `LRP_torch` fails in `loadBestModel`/`load_saved_model`, the refactor
+1. **3544567** (`results/logs/XAIRT_easy.3544567.out`): **passed** before the session ended: both runs `exit 0`, no tracebacks, Keras vs Captum
+   `sign_split` 2.4e-07 and Captum `BoundedRule` vs numpy 1.6-1.8e-07 as before; 3544561 then lost its dependency and waits for a node. If `LRP_torch` fails in `loadBestModel`/`load_saved_model`, the refactor
    is wrong (section 7, `Trainer.py`), and 3544561 and 3544570 will never start.
 2. **3544556, negative class** (`results/ecco_3544556/negative_class.log` and `.../negative_class/negative_class.json`): per lag and class,
    `no_positive_contribution_share` (all explained samples, from a forward pass) should equal `all_zero_share_a1b0_b` and `all_zero_share_a1b0`
@@ -306,6 +532,15 @@ divides each sample by its max (0/0 = NaN for an all-zero sample) and takes `nan
 negative-class maps therefore average over only the samples that LRP could explain, or are entirely NaN where none could** (e.g. lag 0, if the
 first 400 are representative). In the check, the lag 0 neg correlations came out NaN for that reason.
 
+**Correction (2026-11-01, mini job 3545828): the first 400 are not representative.** The published file has **no NaN at any wet point in any
+map**, the lag 0 negative maps included (`negative_class.log` of the mini job, share 0.000 for every variable), so at lag 0 some negative samples
+do get relevance. And `LRP_compare` on all 5770 lag 0 negative samples gave finite per-sample Pearson values (it leaves NaN samples out, so it
+does not say how many are all-zero). The 100% / 28% above are only for the first 400 samples in the order of `correct_indices` (probably
+time order, so the start of the record). The true share over all samples is the `no_positive_contribution_share` of `negative_class.json`
+(forward pass on all samples). Note: `--n-lrp` also takes the first samples, so `all_zero_share_*` there has the same bias; compare it with
+`no_positive_contribution_share_lrp_samples`, not with the all-sample share. The published maps are then averages over the explained subset
+only, not NaN; whether that biases them is still the open question.
+
 ---
 
 ## 5. Open research question: why does LRP give no relevance to the negative class?
@@ -382,7 +617,7 @@ Suggestions made in the session (none applied to the draft, it is the owner's):
 - `Trainer.py`: `TrainTorchFullyConnectedNN._build_model_modules` is now a `@staticmethod` taking `layers_cfg` (line 362); new
   `@staticmethod load_saved_model(path, layers_cfg)` (line 613) rebuilds the network and loads a `.pt` state dict (eval mode, CPU);
   `loadBestModel` (line 632) now calls it. Purpose: load the Torch networks saved by `eccov4r5_LRP_A1B0_torch.py` without a trainer
-  (`--source saved-torch`). **Being tested by job 3544567.**
+  (`--source saved-torch`). **Tested by job 3544567: passed** (training and reloading a Torch network through `loadBestModel` works).
 
 ### Scripts, `scripts_TomsQoI/`
 - `fake_data_LRP_A1B0_compare.py`: rewritten and merged with the session's `fake_data_LRP_same_rules.py` (deleted). Cases on one Keras network:
@@ -403,7 +638,7 @@ Suggestions made in the session (none applied to the draft, it is the owner's):
 - New `eccov4r5_negative_class_LRP.py` (section 5): `mechanism()` (forward pass: positive contributions into logit c, logit, bias, active neurons),
   `difference_model()` (a fresh copy of the network with the logit-difference output; fresh layers because innvestigate refuses layers used in two
   models), LRP on `--n-lrp` samples per class, published-file NaN shares relative to the wet points. Writes `negative_class.json`. Not run yet.
-- New `run_easy_tests.slurm`, `run_eccov4r5.slurm` (section 2.5).
+- New `run_easy_tests.slurm`, `run_eccov4r5.slurm` (section 2.5). New on 2026-11-01: `run_eccov4r5_mini.slurm` (section 2.5).
 
 ### Other
 - `env/create_env.slurm`: env used through `PATH`/`LD_LIBRARY_PATH` (section 2.3) instead of `mamba run`; logs to `scripts_TomsQoI/results/logs/`.

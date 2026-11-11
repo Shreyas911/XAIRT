@@ -37,7 +37,7 @@ run() {
     local name=$1; shift
     [ -n "$SELECTED" ] && [[ " $SELECTED " != *" $name "* ]] && return
     local t0=$SECONDS
-    ( cd "$RUN_DIR" && python "$@" ) > "$RUN_DIR/$name.log" 2>&1
+    ( cd "$RUN_DIR" && python -u "$@" ) > "$RUN_DIR/$name.log" 2>&1
     echo "$name: exit $? ($((SECONDS - t0)) s)"
 }
 

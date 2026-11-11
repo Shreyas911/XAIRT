@@ -21,7 +21,7 @@ import eccov4r5_LRP_A1B0_keras as keras_script
 
 if __name__ == "__main__":
 
-    args = common.parse_args("keras", lambda p: common.add_model_args(p, ('saved', 'train')))
+    args = common.parse_args("keras", lambda p: common.add_model_args(p, ('saved', 'saved-torch', 'train')))
 
     ### https://stackoverflow.com/questions/36288235/how-to-get-stable-results-with-tensorflow-setting-random-seed ###
     ### https://keras.io/examples/keras_recipes/reproducibility_recipes/ ###

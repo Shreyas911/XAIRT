@@ -85,7 +85,8 @@ def add_model_args(parser, sources):
     """The options of the scripts that need a trained network for each lag (OI and analyze)."""
     parser.add_argument("--source", choices = sources, default = sources[0],
                         help="where the networks come from: the saved Keras models of --saved-models-dir "
-                             "('saved' for Keras, 'saved-keras' to copy them into PyTorch), the saved PyTorch models ('saved-torch', "
+                             "('saved' for Keras, 'saved-keras' to copy them into PyTorch), the saved PyTorch models ('saved-torch', copied into "
+                             "Keras with torch_to_keras by the Keras scripts, "
                              "model{lag}_noL1.pt) or 'train' to train them as in the LRP script")
     parser.add_argument("--saved-models-dir",
                         default = "LRP_output_forHelen/saved_models",
@@ -291,8 +292,14 @@ def to_llc(values, wetpoints):
     return field
 
 def normalized_mean_relevance(a):
-    """Each sample divided by its max, then the mean over the samples (LRP_normalize in the notebook)."""
-    return np.nanmean(a / np.nanmax(a, axis = 1)[:,np.newaxis], axis = 0)
+    """
+    Each sample divided by its max abs, then the mean over the samples. The notebook (LRP_normalize) divided by the max, which
+    breaks the whole map when one sample has relevance <= 0 (max 0 -> inf / NaN everywhere): LRP-A1B0 with the bias kept gives
+    that for every sample whose explained logit is negative (job 3545911). For a sample whose max is also its max abs (nearly
+    all samples of the published maps, whose relevance is almost all positive) the two are the same. Changed 2026-11-10 by the
+    owner's choice. An all-zero sample is still 0/0 = NaN and left out by nanmean.
+    """
+    return np.nanmean(a / np.nanmax(np.abs(a), axis = 1)[:,np.newaxis], axis = 0)
 
 def title_key(title):
     """'LRP-A1B0-B' -> 'a1b0_b'"""

@@ -19,7 +19,7 @@ __all__ = ["getLayerIndexByName", "getLayerIndexByName_torch",
            "Keras_GradientDescent_useGradientTape", "Torch_GradientDescent_useAutograd",
            "tf_to_numpy", "torch_to_numpy",
            "metricF1", "metricF1_torch",
-           "model_wo_softmax_torch", "keras_to_torch",
+           "model_wo_softmax_torch", "keras_to_torch", "torch_to_keras",
            "correlation", "correlation_torch"]
 
 @beartype
@@ -177,6 +177,50 @@ def keras_to_torch(model: Model) -> torch.nn.Sequential:
             modules.append(activations[name]())
 
     return torch.nn.Sequential(*modules).eval()
+
+# The reverse of keras_to_torch: a Keras model with the weights of a fully connected Torch nn.Sequential
+# (Linear layers, each optionally followed by an activation module), so that a network trained with Torch
+# can be explained by innvestigate. Fresh Dense layers with zero initializers: the weights are set right
+# after, and a random initializer fails in graph mode with op determinism on and no seed.
+@beartype
+def torch_to_keras(model: torch.nn.Sequential) -> Model:
+
+    activations = {torch.nn.ReLU   : "relu",
+                   torch.nn.Sigmoid: "sigmoid",
+                   torch.nn.Tanh   : "tanh",
+                   torch.nn.Softmax: "softmax"}
+
+    modules = list(model.children())
+    if not modules or not isinstance(modules[0], torch.nn.Linear):
+        raise NotImplementedError("The first module must be a Linear layer.")
+
+    # (Linear, activation name or None) pairs
+    layers = []
+    for module in modules:
+        if isinstance(module, torch.nn.Linear):
+            layers.append([module, None])
+        elif type(module) in activations and layers[-1][1] is None:
+            if isinstance(module, torch.nn.Softmax) and module.dim not in (1, -1):
+                raise NotImplementedError(f"Softmax over dim {module.dim}, only the last one is supported.")
+            layers[-1][1] = activations[type(module)]
+        else:
+            raise NotImplementedError(f"Module {type(module).__name__} is not supported here.")
+
+    inputs = tf.keras.Input(shape = (layers[0][0].in_features,))
+    x, dense_weights = inputs, []
+    for linear, activation in layers:
+        use_bias = linear.bias is not None
+        dense = tf.keras.layers.Dense(linear.out_features, activation = activation, use_bias = use_bias,
+                                      kernel_initializer = "zeros", bias_initializer = "zeros")
+        x = dense(x)
+        w = [linear.weight.detach().cpu().numpy().T.copy()]
+        if use_bias:
+            w.append(linear.bias.detach().cpu().numpy().copy())
+        dense_weights.append((dense, w))
+    for dense, w in dense_weights:
+        dense.set_weights(w)
+
+    return Model(inputs = inputs, outputs = x)
 
 @beartype
 def correlation(X: Float[np.ndarray, "dimy dimx"],

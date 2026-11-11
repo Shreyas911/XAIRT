@@ -4,12 +4,15 @@ Why does LRP give no relevance to many samples of the negative class? See "Open 
     python scripts_TomsQoI/eccov4r5_negative_class_LRP.py                    # the saved Keras models, all 9 lags
     python scripts_TomsQoI/eccov4r5_negative_class_LRP.py --lags 0 60 --n-lrp 200
 
-The suspected mechanism: A1B0 distributes only the positive contributions (h_i w_ic)+ of the last hidden layer h into the logit
-of the explained class c. If there are none, the logit is positive only through the bias b_c, and the relevance of every input
-is zero (with the bias kept, all of it goes to the bias). This holds for any rule of the first layer, Bounded included.
+The suspected mechanism: A1B0 distributes only the positive contributions (h_i w_ij)+ into each neuron j. If a neuron that
+carries relevance has none (it is active only through its bias), its relevance goes nowhere below it (with the bias kept, all of
+it goes to the bias). If that happens for every relevance-carrying neuron of some layer, every input gets zero relevance, for any
+rule of the first layer, Bounded included. The first version only checked the last layer (the logit); on the saved models
+(job 3545869) that never happened although LRP gave all-zero relevance, so the check now goes through every hidden layer.
 
 For each lag and class, on the correctly predicted samples that the LRP scripts explain:
-  1. mechanism, all samples, a forward pass: the share with no positive contribution into the logit, the bias share of the
+  1. mechanism, all samples, a forward pass: the share with no positive contribution into the logit, the share in which A1B0
+     relevance cannot reach the inputs (a hidden layer with no neuron that carries it, blocked_share), the bias share of the
      logit, the number of active neurons in each hidden layer
   2. LRP on the first --n-lrp samples: the share of all-zero relevance for LRP-A1B0-B and LRP-A1B0, expected to match 1
   3. a remedy: LRP-A1B0-B of the logit difference z_c - z_other (the last layer replaced by w_c - w_other, b_c - b_other, the
@@ -43,7 +46,7 @@ METHODS = {'a1b0_b': dict(name='lrp.alpha_1_beta_0_IB', optParams = {'input_laye
            'a1b0'  : dict(name='lrp.alpha_1_beta_0'   , optParams = {})}
 
 def add_args(p):
-    common.add_model_args(p, ('saved', 'train'))
+    common.add_model_args(p, ('saved', 'saved-torch', 'train'))
     p.add_argument("--n-lrp", type = int, default = 500, help="samples per class explained with LRP (the mechanism uses all)")
     p.add_argument("--published", default = str(Path(__file__).resolve().parents[1] /
                                                 "examples_TomsQoI/LRP_output_forHelen/LRP_A1B0_IB_B_newAnomalies_shuffleVal_reweight.nc"),
@@ -54,28 +57,45 @@ def dense_weights(model):
     return [layer.get_weights() for layer in model.layers if isinstance(layer, keras.layers.Dense)]
 
 def mechanism(weights, X, c):
-    """Per sample: the sum of the positive contributions into logit c, the logit, its bias, the active neurons of each hidden layer."""
-    h, active = X.astype(np.float64), []
+    """
+    Per sample: the sum of the positive contributions into logit c, the logit, its bias, the active neurons of each hidden layer,
+    and the layers that A1B0 relevance reaches. A1B0 passes relevance from neuron j down to neuron i only through a positive
+    contribution h_i w_ij > 0, so a neuron carries relevance if it has a positive contribution into a neuron above that carries
+    it. reached[k] is the number of neurons of hidden layer k+1 that carry relevance; if a hidden layer has none, every input
+    gets zero relevance, whatever the rule of the first layer.
+    """
+    hs, active = [X.astype(np.float64)], []
     for W, b in weights[:-1]:
-        h = np.maximum(h @ W + b, 0.0)
-        active.append((h > 0).sum(axis = 1))
+        hs.append(np.maximum(hs[-1] @ W + b, 0.0))
+        active.append((hs[-1] > 0).sum(axis = 1))
     W, b = weights[-1]
+    h = hs[-1]
     pos = np.maximum(h * W[:,c], 0.0).sum(axis = 1)
     logit = h @ W[:,c] + b[c]
-    return pos, logit, float(b[c]), active
+
+    carry = h * W[:,c] > 0    # (samples, neurons of the last hidden layer)
+    reached = [carry.sum(axis = 1)]
+    for k in range(len(weights) - 2, 0, -1):    # the hidden layers below, down to the first hidden layer
+        W_k = weights[k][0]
+        carry = ((hs[k][:,:,None] * W_k[None]) > 0) & carry[:,None,:]    # (samples, i, j)
+        carry = carry.any(axis = 2)
+        reached.insert(0, carry.sum(axis = 1))
+    return pos, logit, float(b[c]), active, reached
 
 def difference_model(weights, c):
     """
     A copy of the network with its last layer replaced by one output, the logit difference z_c - z_other. New layers, since
-    innvestigate does not take layers that are used in two models.
+    innvestigate does not take layers that are used in two models. Zero initializers: the weights are set right after, and a
+    random initializer fails in graph mode with op determinism on ("Random ops require a seed").
     """
+    zeros = dict(kernel_initializer = 'zeros', bias_initializer = 'zeros')
     inp = keras.Input(shape = (weights[0][0].shape[0],))
     x, layers = inp, []
     for W, b in weights[:-1]:
-        layers.append((keras.layers.Dense(W.shape[1], activation = 'relu'), [W, b]))
+        layers.append((keras.layers.Dense(W.shape[1], activation = 'relu', **zeros), [W, b]))
         x = layers[-1][0](x)
     W, b = weights[-1]
-    layers.append((keras.layers.Dense(1, activation = None), [(W[:,c] - W[:,1-c])[:,None], np.array([b[c] - b[1-c]])]))
+    layers.append((keras.layers.Dense(1, activation = None, **zeros), [(W[:,c] - W[:,1-c])[:,None], np.array([b[c] - b[1-c]])]))
     out = layers[-1][0](x)
     for layer, w in layers:
         layer.set_weights(w)
@@ -127,16 +147,21 @@ if __name__ == "__main__":
             if len(idx_c) == 0:
                 continue
             X_c = ctx.X[idx_c]
-            pos, logit, bias, active = mechanism(weights, X_c, c)
+            pos, logit, bias, active, reached = mechanism(weights, X_c, c)
+            blocked = np.any(np.stack(reached) == 0, axis = 0)
             r = {'n': len(idx_c),
                  'no_positive_contribution_share': float((pos == 0).mean()),
+                 'blocked_share': float(blocked.mean()),
+                 'blocked_share_by_layer': [float((n == 0).mean()) for n in reached],
                  'bias': bias,
                  'bias_share_of_logit_median': float(np.median(bias / logit)),
-                 'active_neurons_median': [float(np.median(n)) for n in active]}
+                 'active_neurons_median': [float(np.median(n)) for n in active],
+                 'relevance_neurons_median': [float(np.median(n)) for n in reached]}
 
             sub = X_c[:args.n_lrp]
             r['n_lrp'] = len(sub)
             r['no_positive_contribution_share_lrp_samples'] = float((pos[:args.n_lrp] == 0).mean())
+            r['blocked_share_lrp_samples'] = float(blocked[:args.n_lrp].mean())
             maps = {}
             for key, method in METHODS.items():
                 a = XAIKeras(keras_wo_softmax, method, 'classic', sub, RAW).quick_analyze()[0].astype(np.float64)

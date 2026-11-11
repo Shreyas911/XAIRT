@@ -12,6 +12,10 @@ contributions are x_i (w_ij)+ in Captum and (x_i w_ij)+ in innvestigate (fake_da
 innvestigate's rules, sign_split for A1B0 and its BoundedRule for the first layer of A1B0-B, and agreement to float precision is
 expected for both methods.
 
+With --source saved-torch the network is one trained with PyTorch instead (model{lag}_noL1.pt of an LRP_torch run), copied into
+Keras with torch_to_keras and back into PyTorch with keras_to_torch (an exact copy), so a Torch-trained network is explained by
+innvestigate too.
+
     python scripts_TomsQoI/eccov4r5_LRP_A1B0_compare.py                     # the saved Keras models of --saved-models-dir
     python scripts_TomsQoI/eccov4r5_LRP_A1B0_compare.py --source train --epochs 2 --lags 0    # trained, quick test
 
@@ -76,7 +80,15 @@ def agreement(a_keras, a_torch):
     map_torch = common.normalized_mean_relevance(a_torch)
     finite = np.isfinite(map_keras) & np.isfinite(map_torch)
 
+    # The nan functions above hide samples that one backend gets wrong (inf or NaN relevance), so count them
+    def counts(a):
+        return {'n_all_zero': int((np.abs(a).sum(axis = 1) == 0).sum()),
+                'n_nonfinite': int((~np.isfinite(a)).any(axis = 1).sum())}
+
     return {'n': int(a_keras.shape[0]),
+            'keras': counts(a_keras),
+            'torch': counts(a_torch),
+            'n_pearson_nan': int(np.isnan(r).sum()),
             'pearson_mean': float(np.nanmean(r)),
             'pearson_min': float(np.nanmin(r)),
             'cosine_mean': float(np.nanmean(c)),
@@ -84,7 +96,7 @@ def agreement(a_keras, a_torch):
 
 if __name__ == "__main__":
 
-    args = common.parse_args("compare", lambda p: common.add_model_args(p, ('saved', 'train')))
+    args = common.parse_args("compare", lambda p: common.add_model_args(p, ('saved', 'saved-torch', 'train')))
 
     keras.utils.set_random_seed(args.seed)
     tf.config.experimental.enable_op_determinism()
@@ -140,7 +152,8 @@ if __name__ == "__main__":
                 maps[f"lrp_{common.lag_name(lag)}_{key}_{cls}_keras"] = common.to_llc(map_keras, wetpoints)
                 maps[f"lrp_{common.lag_name(lag)}_{key}_{cls}_torch"] = common.to_llc(map_torch, wetpoints)
 
-                print(f"  {cls}, {method['title']}: " + ", ".join(f"{k} = {v:.4f}" for k, v in result[cls][key].items() if k != 'n'))
+                print(f"  {cls}, {method['title']}: " + ", ".join(f"{k} = {v:.4f}" if isinstance(v, float) else f"{k} = {v}"
+                                                                  for k, v in result[cls][key].items() if k != 'n'))
 
         results[str(lag)] = result
 

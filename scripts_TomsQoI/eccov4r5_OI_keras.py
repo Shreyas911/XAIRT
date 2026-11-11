@@ -32,7 +32,12 @@ def optimal_input(model, desired_labels, init, eta, n_iters, print_freq):
 
     inp_numpy = init.astype(np.float32)
     desired = tf.convert_to_tensor(desired_labels)
-    bce = keras.losses.BinaryCrossentropy()
+    # BCE of the softmax probabilities, as BCELoss in eccov4r5_OI_torch.py. Not BinaryCrossentropy() on the output directly:
+    # Keras' softmax caches its input logits on its output, and binary_crossentropy then uses them as sigmoid logits, i.e. the
+    # mean of BCE(sigmoid(z_k), t_k) over the outputs, a different loss (the notebooks' OI used that one). tf.identity drops
+    # the cached logits.
+    keras_bce = keras.losses.BinaryCrossentropy()
+    bce = lambda y_true, y_pred: keras_bce(y_true, tf.identity(y_pred))
 
     print(f"Desired label : {desired_labels}")
     print(f"Iter 0, Prediction {model.predict(inp_numpy, verbose = 0)}")
@@ -47,7 +52,7 @@ def optimal_input(model, desired_labels, init, eta, n_iters, print_freq):
 
 if __name__ == "__main__":
 
-    args = common.parse_args("keras", lambda p: oi_common.add_oi_args(p, ('saved', 'train')))
+    args = common.parse_args("keras", lambda p: oi_common.add_oi_args(p, ('saved', 'saved-torch', 'train')))
 
     ### https://stackoverflow.com/questions/36288235/how-to-get-stable-results-with-tensorflow-setting-random-seed ###
     ### https://keras.io/examples/keras_recipes/reproducibility_recipes/ ###

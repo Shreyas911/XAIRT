@@ -20,7 +20,7 @@ import innvestigate
 
 # Append the src directory of the repository to sys.path, then import XAIRT
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from XAIRT import TrainKerasFullyConnectedNN, XAIKeras, metricF1
+from XAIRT import TrainKerasFullyConnectedNN, TrainTorchFullyConnectedNN, XAIKeras, metricF1, torch_to_keras
 
 import eccov4r5_common as common
 
@@ -55,15 +55,23 @@ def make_train_fn(args):
     return train
 
 def make_get_model(args):
-    """get_model(lag, ctx) of the OI, analyze and compare scripts: the saved Keras model of the lag, or, with --source train, a trained one."""
+    """
+    get_model(lag, ctx) of the OI, analyze, compare and negative_class scripts: with --source saved the saved Keras model of
+    the lag, with --source saved-torch a model trained with PyTorch (model{lag}_noL1.pt in --saved-models-dir, e.g. the models/
+    of an LRP_torch run) with its weights copied into a Keras model (torch_to_keras), or, with --source train, a trained one.
+    """
 
     train = make_train_fn(args)
 
     def get_model(lag, ctx):
-        if args.source == 'saved':
-            model = keras.models.load_model(join(args.saved_models_dir, f'model{lag}_noL1.h5'),
-                                            custom_objects = {'metricF1': metricF1})
-            # The saved layers are 'dense', 'dense_1', ..., and innvestigate.model_wo_softmax names its new layer 'dense' in
+        if args.source in ('saved', 'saved-torch'):
+            if args.source == 'saved':
+                model = keras.models.load_model(join(args.saved_models_dir, f'model{lag}_noL1.h5'),
+                                                custom_objects = {'metricF1': metricF1})
+            else:
+                model = torch_to_keras(TrainTorchFullyConnectedNN.load_saved_model(
+                    join(args.saved_models_dir, f'model{lag}_noL1.pt'), ctx.layers))
+            # The layers are 'dense', 'dense_1', ..., and innvestigate.model_wo_softmax names its new layer 'dense' in
             # a fresh session, which Keras refuses ("The name "dense" is used 2 times in the model").
             for layer in model.layers:
                 layer._name = f"saved_{layer.name}"

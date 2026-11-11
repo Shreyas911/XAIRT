@@ -60,7 +60,9 @@ Comparing 1 and 3 isolates the difference between the two XAI libraries, since i
 The data, the paths (`--r4-dir`, `--r5-dir`) and the lags (`--lags`) are the same for all of these, see `eccov4r5_common.py`. Every script (these and
 the fake-data ones) writes its output, including the figures of the notebooks, to `scripts_TomsQoI/results/<script name>/` unless `--out-dir` is given;
 the folder is not in git. On the cluster, run them through `scripts_TomsQoI/run_eccov4r5.slurm` (ECCO) and `scripts_TomsQoI/run_easy_tests.slurm`
-(fake data), from the repository root; their output goes to `scripts_TomsQoI/results/{ecco,easy}_<jobid>/`. The usual order is:
+(fake data), from the repository root; their output goes to `scripts_TomsQoI/results/{ecco,easy}_<jobid>/`. Before queuing long ECCO runs,
+`sbatch scripts_TomsQoI/run_eccov4r5_mini.slurm` runs every `run_eccov4r5.slurm` run with small settings (2 lags, 3 epochs, 20 OI steps) in one
+dev-queue job, output in `scripts_TomsQoI/results/mini_<jobid>/`. The usual order is:
 
 | Step | Script | What it does |
 |---|---|---|

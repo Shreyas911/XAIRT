@@ -35,7 +35,7 @@ run() {
     local name=$1; shift
     [[ " $SELECTED " != *" $name "* ]] && return
     local t0=$SECONDS
-    ( cd "$RUN_DIR" && python "$@" ) > "$RUN_DIR/$name.log" 2>&1
+    ( cd "$RUN_DIR" && python -u "$@" ) > "$RUN_DIR/$name.log" 2>&1
     echo "$name: exit $? ($((SECONDS - t0)) s)"
 }
 
@@ -65,4 +65,13 @@ needs LRP_compare_trained KERAS_MODELS || run LRP_compare_trained $S/eccov4r5_LR
 needs OI_keras_trained KERAS_MODELS || run OI_keras_trained $S/eccov4r5_OI_keras.py --source saved       --saved-models-dir "$KERAS_MODELS" --out-dir OI_keras_trained
 needs OI_keras_in_torch_trained KERAS_MODELS || run OI_keras_in_torch_trained $S/eccov4r5_OI_torch.py --source saved-keras --saved-models-dir "$KERAS_MODELS" --out-dir OI_keras_in_torch_trained
 needs OI_torch_trained TORCH_MODELS || run OI_torch_trained $S/eccov4r5_OI_torch.py --source saved-torch --saved-models-dir "$TORCH_MODELS" --out-dir OI_torch_trained
+# The reverse: the networks of an LRP_torch run (TORCH_MODELS) copied into Keras (torch_to_keras), explained by both libraries
+# and with the Keras OI
+needs LRP_compare_torch_trained TORCH_MODELS || run LRP_compare_torch_trained $S/eccov4r5_LRP_A1B0_compare.py --source saved-torch --saved-models-dir "$TORCH_MODELS" --out-dir LRP_compare_torch_trained
+# Dead neurons (eccov4r5_dead_neurons.py): are the networks without relevance / OI movement for a whole class a property of Keras'
+# training or of the seed? Train both backends for several seeds (seed 42 is the one of the LRP runs, so it should reproduce them),
+# and Keras in eager mode without TF32, the two ways in which its training differs from the LRP script's. About 4 h, -t 08:00:00.
+run dead_neurons_seeds $S/eccov4r5_dead_neurons.py --backends keras torch --seeds 42 43 44 --lags -30 0 30 60 120 --out-dir dead_neurons_seeds
+run dead_neurons_keras_eager $S/eccov4r5_dead_neurons.py --backends keras --keras-eager --no-tf32 --seeds 42 43 44 --lags -30 0 120 --out-dir dead_neurons_keras_eager
+needs OI_torch_in_keras_trained TORCH_MODELS || run OI_torch_in_keras_trained $S/eccov4r5_OI_keras.py --source saved-torch --saved-models-dir "$TORCH_MODELS" --out-dir OI_torch_in_keras_trained
 echo "done"
