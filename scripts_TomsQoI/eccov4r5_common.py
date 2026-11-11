@@ -77,6 +77,11 @@ def parse_args(backend, extra_args = None):
     p.add_argument("--epochs", type=int, default=500, help="use a small number to test the script")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-plots", action="store_true", help="do not save figures")
+    p.add_argument("--fields", nargs="+", default=["SST"], choices=sorted(FIELDS),
+                   help="input fields, side by side in X (see FIELDS); the QoI is always the SST one")
+    p.add_argument("--field-scale", choices=["none", "std"], default="none",
+                   help="divide each field's anomalies by their std over all grid points and days ('std'), so that fields "
+                        "in different units are comparable; 'none' (default) keeps the published SST experiment")
     if extra_args is not None:
         extra_args(p)
     return p.parse_args()
@@ -149,15 +154,42 @@ def anomalize_new(field, num_years = 31, first_leap_year_idx = 0):
 
     return field
 
-def load_data(r4_dir, r5_dir):
+def load_data(r4_dir, r5_dir, fields = ('SST',), field_scale = 'none'):
     """X, oneHotCost, wetpoints, XC, YC of load_data_with_y"""
-    X, y, oneHotCost, wetpoints, XC, YC = load_data_with_y(r4_dir, r5_dir)
+    X, y, oneHotCost, wetpoints, XC, YC = load_data_with_y(r4_dir, r5_dir, fields, field_scale)
     return X, oneHotCost, wetpoints, XC, YC
 
-def load_anomalies(r4_dir, r5_dir):
+# --- Input fields -------------------------------------------------------------------------
+#
+# The input X of the networks is the anomalies of one or more daily surface fields at the wet points, side by side:
+# X[:, k*n_wet:(k+1)*n_wet] is field k of --fields (n_wet = len(wetpoints[0]); all fields share the SST wet-point mask, so
+# they must be surface fields on the LLC90 grid; a field with its own mask needs a mask per field). To add a field, write a
+# loader that returns its daily values (days, 13, 90, 90) on the same days as SST_all.nc, and add it to FIELDS; every script
+# then takes it with --fields SST <NAME>. The maps (relevance, OI, composites) are split back per field by field_maps(), and
+# with one field the names of the NetCDF variables and figures are the ones of the single-SST experiment.
+
+def load_sst(r4_dir, r5_dir):
+    return xr.open_dataset(join(r5_dir, 'SST_all.nc'))['SST'].data
+
+FIELDS = {'SST': load_sst}
+
+def field_maps(values, wetpoints, fields):
     """
-    Returns X_full (days, wetpoints) of the new SST anomalies, y_full (days,) of the QoI, the same at the
-    grid point of the objective function, the indices of the wetpoints and XC, YC for plotting.
+    (len(fields)*n_wet,) -> [(tag, (13, 90, 90) map)], one per field, tag '' for a single field (the names of the single-SST
+    experiment) and '<FIELD>_' otherwise, to put into a variable name, e.g. f"lrp_{lag}_{tag}{method}_{cls}".
+    """
+    n = len(wetpoints[0])
+    if len(values) != n*len(fields):
+        raise ValueError(f"{len(values)} values for {len(fields)} fields of {n} wet points")
+    if len(fields) == 1:
+        return [('', to_llc(values, wetpoints))]
+    return [(f'{field}_', to_llc(values[k*n:(k+1)*n], wetpoints)) for k, field in enumerate(fields)]
+
+def load_anomalies(r4_dir, r5_dir, fields = ('SST',), field_scale = 'none'):
+    """
+    Returns X_full (days, len(fields)*wetpoints) of the new anomalies of the input fields (see FIELDS), y_full (days,) of the
+    QoI, the SST anomaly at the grid point of the objective function, the indices of the wetpoints and XC, YC for plotting.
+    With field_scale 'std' each field's anomalies are divided by their std over all wet points and days.
 
     The notebook also read the mds SST files with xmitgcm and built a number of DataArrays
     (masks, X, y, ...) that the results never used, only XC and YC are still needed.
@@ -165,7 +197,7 @@ def load_anomalies(r4_dir, r5_dir):
 
     gridDir = join(r5_dir, 'GRID')
     ds_r4 = xr.open_dataset(join(r4_dir, 'thetaSurfECCOv4r4.nc'))
-    SST = xr.open_dataset(join(r5_dir, 'SST_all.nc'))['SST'].data
+    SST = load_sst(r4_dir, r5_dir)
 
     hFacC = ecco.read_llc_to_tiles(gridDir, 'hFacC.data')
     hFacC_mask = (hFacC > 0).astype(float)
@@ -183,7 +215,16 @@ def load_anomalies(r4_dir, r5_dir):
     XC = llc_dataarray(ds_r4['XC'].data)
     YC = llc_dataarray(ds_r4['YC'].data)
 
-    X_full = anomalize_new(SST[:,wetpoints[0],wetpoints[1],wetpoints[2]].copy())
+    parts = []
+    for name in fields:
+        data = SST if name == 'SST' else FIELDS[name](r4_dir, r5_dir)
+        if data.shape[0] != SST.shape[0]:
+            raise ValueError(f"field {name} has {data.shape[0]} days, SST {SST.shape[0]}")
+        part = anomalize_new(data[:,wetpoints[0],wetpoints[1],wetpoints[2]].copy())
+        if field_scale == 'std':
+            part = part / np.std(part)
+        parts.append(part)
+    X_full = parts[0] if len(parts) == 1 else np.concatenate(parts, axis = 1)
     y_full = anomalize_new(SST[:,10,1,43].copy())
 
     return X_full, y_full, wetpoints, XC, YC
@@ -206,13 +247,13 @@ def make_qoi(X_full, y_full):
 
     return X, y, oneHotCost
 
-def load_data_with_y(r4_dir, r5_dir):
+def load_data_with_y(r4_dir, r5_dir, fields = ("SST",), field_scale = "none"):
     """
-    Returns X (samples, wetpoints) of SST anomalies, the QoI y (samples,) before it is made a class, the one-hot QoI
+    Returns X (samples, len(fields)*wetpoints) of the anomalies, the QoI y (samples,) before it is made a class, the one-hot QoI
     (samples, 2) as float32, the indices of the wetpoints and XC, YC for plotting, see make_qoi.
     """
 
-    X_full, y_full, wetpoints, XC, YC = load_anomalies(r4_dir, r5_dir)
+    X_full, y_full, wetpoints, XC, YC = load_anomalies(r4_dir, r5_dir, fields, field_scale)
     X, y, oneHotCost = make_qoi(X_full, y_full)
 
     return X, y, oneHotCost, wetpoints, XC, YC
@@ -227,8 +268,8 @@ def make_context(args):
     models_dir = join(args.out_dir, 'models')
     os.makedirs(models_dir, exist_ok = True)
 
-    X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir)
-    return types.SimpleNamespace(X = X, oneHotCost = oneHotCost, wetpoints = wetpoints, XC = XC, YC = YC,
+    X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir, args.fields, args.field_scale)
+    return types.SimpleNamespace(X = X, oneHotCost = oneHotCost, wetpoints = wetpoints, XC = XC, YC = YC, fields = list(args.fields),
                                  layers = make_layers(X.shape[1]),
                                  class_weight = class_weights(oneHotCost),
                                  idx = int(X.shape[0]*(1-TEST_SPLIT_FRAC)),
@@ -321,12 +362,11 @@ def run_experiment(backend, args, train_fn, predict_fn, explain_fn, methods):
     models_dir = join(args.out_dir, 'models')
     os.makedirs(models_dir, exist_ok = True)
 
-    X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir)
+    X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir, args.fields, args.field_scale)
     layers = make_layers(X.shape[1])
     class_weight = class_weights(oneHotCost)
 
     idx = int(X.shape[0]*(1-TEST_SPLIT_FRAC))
-    nan_map = np.full(LLC_SHAPE, np.nan)
 
     results = {}
     for lag in args.lags:
@@ -347,20 +387,25 @@ def run_experiment(backend, args, train_fn, predict_fn, explain_fn, methods):
                   'n_pos': len(idx_pos), 'n_neg': len(idx_neg)}
         maps = {}
 
+        nan_values = np.full(X.shape[1], np.nan)
         for cls, idx_c in (('pos', idx_pos), ('neg', idx_neg)):
-            maps[f'comp_{cls}'] = to_llc(np.nanmean(X[idx_c], axis = 0), wetpoints) if len(idx_c) > 0 else nan_map
+            comp = np.nanmean(X[idx_c], axis = 0) if len(idx_c) > 0 else nan_values
+            for tag, field in field_maps(comp, wetpoints, args.fields):
+                maps[f'{tag}comp_{cls}'] = field
 
             for method in methods:
                 print(f"Analyze using {method['title']} for {cls} samples")
-                if len(idx_c) > 0:
-                    a = explain_fn(model_for_xai, method, X[idx_c])
-                    maps[f"{title_key(method['title'])}_{cls}"] = to_llc(normalized_mean_relevance(a), wetpoints)
-                else:
-                    maps[f"{title_key(method['title'])}_{cls}"] = nan_map
+                mean = normalized_mean_relevance(explain_fn(model_for_xai, method, X[idx_c])) if len(idx_c) > 0 else nan_values
+                for tag, field in field_maps(mean, wetpoints, args.fields):
+                    maps[f"{tag}{title_key(method['title'])}_{cls}"] = field
 
         results[lag] = (result, maps)
 
     finalize(backend, args, results, methods, XC, YC)
+
+def field_tags(fields):
+    """The tags of field_maps(): [''] for a single field, ['<FIELD>_', ...] otherwise."""
+    return [''] if len(fields) == 1 else [f'{field}_' for field in fields]
 
 def finalize(backend, args, results, methods, XC, YC):
 
@@ -381,19 +426,20 @@ def finalize(backend, args, results, methods, XC, YC):
     if args.no_plots:
         return
 
-    for cls in ('pos', 'neg'):
+    for tag in field_tags(args.fields):
+        for cls in ('pos', 'neg'):
 
-        plot_maps({lag: maps[f'comp_{cls}'] for lag, (_, maps) in results.items()}, XC, YC,
-                  f"Composite observations ({cls}_all) lag {{lag}} days",
-                  join(args.out_dir, f'composite_{cls}_{backend}.png'),
-                  cmap = cmocean.cm.balance, cmin = -1, cmax = 1)
+            plot_maps({lag: maps[f'{tag}comp_{cls}'] for lag, (_, maps) in results.items()}, XC, YC,
+                      f"{tag}Composite observations ({cls}_all) lag {{lag}} days",
+                      join(args.out_dir, f'{tag}composite_{cls}_{backend}.png'),
+                      cmap = cmocean.cm.balance, cmin = -1, cmax = 1)
 
-        for method in methods:
-            key = title_key(method['title'])
-            plot_maps({lag: maps[f'{key}_{cls}'] for lag, (_, maps) in results.items()}, XC, YC,
-                      f"{method['title']}_all lag {{lag}} days",
-                      join(args.out_dir, f'{key}_{cls}_{backend}.png'),
-                      cmap = 'jet', cmin = 0.0, cmax = 0.3)
+            for method in methods:
+                key = title_key(method['title'])
+                plot_maps({lag: maps[f'{tag}{key}_{cls}'] for lag, (_, maps) in results.items()}, XC, YC,
+                          f"{tag}{method['title']}_all lag {{lag}} days",
+                          join(args.out_dir, f'{tag}{key}_{cls}_{backend}.png'),
+                          cmap = 'jet', cmin = 0.0, cmax = 0.3)
 
 def plot_maps(fields, XC, YC, title, path, cmap, cmin, cmax):
     """One figure with a map for each lag, in 3 columns (3x3 for the 9 lags of the notebook)."""

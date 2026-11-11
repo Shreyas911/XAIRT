@@ -42,8 +42,9 @@ def run_oi(backend, args, get_model, predict_fn, optimal_input_fn):
     ctx = common.make_context(args)
 
     kinds = ['pos', 'neg'] if args.kind == 'both' else [args.kind]
-    nan_map = np.full(common.LLC_SHAPE, np.nan)
-    fields = {kind: {} for kind in kinds}
+    tags = common.field_tags(ctx.fields)
+    # fields[kind][tag][lag]: one map per input field (tag '' for a single field, see common.field_maps)
+    fields = {kind: {tag: {} for tag in tags} for kind in kinds}
 
     for lag in args.lags:
 
@@ -56,20 +57,22 @@ def run_oi(backend, args, get_model, predict_fn, optimal_input_fn):
             idx_c = idx_pos if kind == 'pos' else idx_neg
 
             if len(idx_c) == 0:
-                fields[kind][lag] = nan_map
-                continue
-
-            print(f"Optimal input for {kind} samples, starting from the mean of {len(idx_c)} correct samples")
-            init = np.nanmean(ctx.X[idx_c], axis = 0)[np.newaxis,:]
-            oi = optimal_input_fn(model, DESIRED[kind], init, args.eta, args.oi_iters, args.print_freq)
-            fields[kind][lag] = common.to_llc(oi, ctx.wetpoints)
+                oi = np.full(ctx.X.shape[1], np.nan)
+            else:
+                print(f"Optimal input for {kind} samples, starting from the mean of {len(idx_c)} correct samples")
+                init = np.nanmean(ctx.X[idx_c], axis = 0)[np.newaxis,:]
+                oi = optimal_input_fn(model, DESIRED[kind], init, args.eta, args.oi_iters, args.print_freq)
+            for tag, field in common.field_maps(oi, ctx.wetpoints, ctx.fields):
+                fields[kind][tag][lag] = field
 
     for kind in kinds:
-        # The same variable names as in the notebooks, e.g. OI_minus60, OI_0
-        xr.Dataset({f"OI_{common.lag_name(lag)}": xr.DataArray(field) for lag, field in fields[kind].items()}).to_netcdf(
+        # The same variable names as in the notebooks, e.g. OI_minus60, OI_0 (with more than one field OI_SST_0, OI_SSH_0, ...)
+        xr.Dataset({f"OI_{tag}{common.lag_name(lag)}": xr.DataArray(field)
+                    for tag in tags for lag, field in fields[kind][tag].items()}).to_netcdf(
             join(args.out_dir, f'OI_v4r5_{kind}_newAnomalies_shuffleVal_reweight_avgInit_savedNN_{backend}.nc'))
 
         if not args.no_plots:
-            common.plot_maps(fields[kind], ctx.XC, ctx.YC, f"OI_{kind} lag {{lag}} days",
-                             join(args.out_dir, f'OI_{kind}_{backend}.png'),
-                             cmap = 'RdBu_r', cmin = -1, cmax = 1)
+            for tag in tags:
+                common.plot_maps(fields[kind][tag], ctx.XC, ctx.YC, f"{tag}OI_{kind} lag {{lag}} days",
+                                 join(args.out_dir, f'{tag}OI_{kind}_{backend}.png'),
+                                 cmap = 'RdBu_r', cmin = -1, cmax = 1)

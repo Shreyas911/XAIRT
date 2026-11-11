@@ -149,8 +149,9 @@ if __name__ == "__main__":
                 a_torch = explain_torch(torch_wo_softmax, method, X[idx_c])
 
                 result[cls][key], map_keras, map_torch = agreement(a_keras, a_torch)
-                maps[f"lrp_{common.lag_name(lag)}_{key}_{cls}_keras"] = common.to_llc(map_keras, wetpoints)
-                maps[f"lrp_{common.lag_name(lag)}_{key}_{cls}_torch"] = common.to_llc(map_torch, wetpoints)
+                for lib, m in (('keras', map_keras), ('torch', map_torch)):
+                    for tag, field in common.field_maps(m, wetpoints, ctx.fields):
+                        maps[f"lrp_{common.lag_name(lag)}_{tag}{key}_{cls}_{lib}"] = field
 
                 print(f"  {cls}, {method['title']}: " + ", ".join(f"{k} = {v:.4f}" if isinstance(v, float) else f"{k} = {v}"
                                                                   for k, v in result[cls][key].items() if k != 'n'))
