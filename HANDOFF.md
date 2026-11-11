@@ -442,6 +442,60 @@ jobs that wait for it `afterok` (3573700, 3573730, 3573733, 3573737) stay pendin
 resubmit them (commands in this table). Not covered by any job: the Keras OI speed-up (needs the 3573699 timings first) and the old
 `~/.vscode-server` deletion.
 
+**3573699 passed (2026-11-11 00:36, all 8 runs exit 0)**, so 3573700, 3573730, 3573733, 3573737 are released (now waiting for nodes).
+Its Keras OI speed result (`followup3_3573699/oi_speed_{script,nodeterminism}.log`, 200 steps, saved lag 0 network, pos), ms/step:
+
+| way | GPU, determinism on | CPU, on | GPU, off | CPU, off |
+|---|---|---|---|---|
+| Keras as the script (tf.function call per step, numpy round trip) | 0.716 | 0.770 | 0.769 | 1.073 |
+| Keras, tensors kept on the device | 0.375 | 0.577 | 0.378 | 0.933 |
+| Keras, whole loop in one graph | 0.237 | 0.231 | 0.272 | 0.624 |
+| Torch as its script (CPU) | 0.275 | | 0.303 | |
+| Torch on the GPU | 0.518 | | 0.532 | |
+
+All ways give the same final input (max diff 3e-7, 0 on the same device). Determinism does not slow it down. **So the gradient step is
+not why the Keras OI script is slow**: 0.7 ms/step would be 0.6 s for the 800 steps of 3573687, which took 412 s in Keras (35 s Torch);
+3544568 took about 0.1 s/step over 10000-step runs. Something else in the script costs time, and more with more steps (the mini runs
+with 20 steps were as fast as Torch). Main suspect: `model.predict` in the loop (every `--print-freq` steps). **Profiling job 3573842**
+(`gpu-a100-dev`, `results/checks/check_oi_profile.slurm`, not in git): cProfile of the real `eccov4r5_OI_keras.py`, lag 0, pos, 400
+steps, with `--print-freq 50` and `100000` (no prints); output `results/checks/oi_profile_3573842/prof_pf*.txt` (top functions by
+cumulative and own time) and the run times in `check_oi_profile.3573842.out`.
+
+### Multi-field input (2026-11-11, owner: "Modify the code so that more than one input ECCO fields can be handled in the future")
+
+Done on a **separate branch `multi_field` in a separate git worktree, `/work/07665/shrey911/ls6/XAIRT_multi_field`**, because the 11
+queued jobs read `scripts_TomsQoI/*.py` of this checkout when they start (any time during the owner's week away); editing them here
+could break those runs. Merge `multi_field` into `clean_keras_torch` after the queued jobs have started (or finished) and the test
+below passed: `git merge multi_field` here, then `git worktree remove /work/07665/shrey911/ls6/XAIRT_multi_field`. Nothing is
+committed on the branch yet (the owner commits).
+
+Design (all in the worktree, `scripts_TomsQoI/`):
+- `eccov4r5_common.py`: `FIELDS = {'SST': load_sst}`, a registry of loaders returning daily (days, 13, 90, 90) fields on the same days
+  as `SST_all.nc`. `--fields` (default `SST`) and `--field-scale none|std` (default `none`) in `parse_args`, so every script has them.
+  `load_anomalies(r4, r5, fields, field_scale)` anomalizes each field at the SST wet points and puts them side by side:
+  `X[:, k*n_wet:(k+1)*n_wet]` is field k. **All fields share the SST wet-point mask** (surface fields on LLC90 only; a field with its
+  own mask would need a mask per field). The QoI stays the SST anomaly at [10, 1, 43]. `field_scale 'std'` divides each field by its
+  std over all wet points and days (all days, so the test period is included in the std: negligible leakage, but note it), needed when
+  fields have different units, also for the Bounded rule's (-1, 1) bounds. `field_maps(values, wetpoints, fields)` splits a
+  (n_fields*n_wet,) vector into per-field LLC maps with a tag: `''` for a single field (so **every NetCDF variable and figure name of the
+  single-SST experiment is unchanged**) and `'<FIELD>_'` otherwise (e.g. `lrp_0_SSH_a1b0_b_pos_all`, `OI_SSH_0`, `SSH_composite_pos_keras.png`).
+  `field_tags(fields)` lists the tags. `make_context` carries `ctx.fields`; `run_experiment` / `finalize` (LRP scripts) write per-field
+  composites, relevance maps and figures.
+- `eccov4r5_OI_common.py` (OI scripts) and `eccov4r5_LRP_A1B0_compare.py`: per-field maps and figures the same way.
+- Unchanged, and fine with several fields: `eccov4r5_dead_neurons.py`, `eccov4r5_analyze_*`, `eccov4r5_negative_class_LRP.py` (they
+  use only X; the published-file NaN check uses the SST wet points). Unchanged and **SST only**: `eccov4r5_dataReader.py`,
+  `eccov4r5_viz_common.py`, `eccov4r5_results_viz*.py` (SST diagnostics; they ignore `--fields`).
+- To add a field: write `load_<name>(r4_dir, r5_dir)` and add it to `FIELDS`; run any script with `--fields SST <NAME> --field-scale std`.
+  Networks trained on one set of fields only work with the same `--fields` (the input width differs).
+
+**Test job 3573843** (`gpu-a100`, 1.5 h, submitted from the worktree; `results/checks/test_multi_field.slurm` and the driver
+`results/checks/with_test_field.py` there, not in git; log `<worktree>/scripts_TomsQoI/results/checks/test_multi_field.3573843.out`,
+run dir `.../results/checks/multi_3573843/`): (1) SST only, deterministic runs on the saved models (OI_torch 20 steps lags 0 60,
+LRP_compare lag 0) with the main code and the branch, then `eccov4r5_compare_maps.py`: **every map must have pearson 1 and max|A-B| 0**
+(`same_as_main.log`); (2) `--fields SST SST2 --field-scale std` (SST2 = a copy of SST registered by the driver): LRP_keras and
+LRP_torch (3 epochs, lags 0 60), compare on both trained sets, Keras and Torch OI and negative_class on the Torch networks,
+dead_neurons inspect: all must exit 0 and write `SST_...` and `SST2_...` maps. Exits 1 if anything failed.
+
 The three cases the owner asked for, for LRP and for OI: **Keras** (3544560 LRP, 3544568 OI), **Torch** (3544561 LRP, 3544570 OI), **Keras network
 with Torch XAI** (3544562 LRP, 3544569 OI).
 
