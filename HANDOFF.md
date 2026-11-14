@@ -32,7 +32,9 @@ cp -a ~/.claude/projects/-home1-07665-shrey911-XAIRT/*.jsonl ~/.claude/projects/
       /work/07665/shrey911/ls6/claude_session_backups/
 ```
 
-Sessions so far: `3cf0f372-6954-4299-afcf-169612297e29` (2026-10-31). Add each new session id here. A session can be resumed with
+Sessions so far: `3cf0f372-6954-4299-afcf-169612297e29` (2026-10-31), `8925f256-4efe-4bf8-ba41-33085efeed30` (2026-11-14, started
+from `~`, so its transcript is in `~/.claude/projects/-home1-07665-shrey911/`, not the XAIRT folder; backed up to
+`claude_session_backups/home_project/`). Add each new session id here. A session can be resumed with
 `claude --resume` (pick from a list) or `claude --continue` (the latest) from `/home1/07665/shrey911/XAIRT`, or from the VS Code extension's past
 conversations. The transcript is a convenience; this file and git (commit and push) remain the durable record.
 
@@ -533,6 +535,78 @@ about 430 pending jobs on 2026-11-01 and ours waited 1-6 days then, so expect da
 8. Leftovers: delete the old `~/.vscode-server` on /home1 (about 1.7 GB) once no process runs from it (`ps -u $USER -o args | grep
    /home1/07665/shrey911/.vscode-server` empty); reinstall VS Code extensions on the new /work server if not done (Python, Pylance,
    Python Debugger, Python Environments, C/C++, Fortran linter).
+
+### 2026-11-14 (session started from `~`, so it did not load this project's `memory/`; start Claude from the repo root)
+
+- `sacct`: 3573699, 3573738 (mini, all 12 runs exit 0), 3573740, 3573842, 3573843 COMPLETED exit 0. The other 12 gpu-a100 jobs
+  (3573700, 3573727, 3573729-3573737, 3573742) still PENDING (Priority), 380 jobs pending in gpu-a100. `multi_field` not merged yet (the
+  queued jobs have not started). 3573843 passed: `same_as_main.log` all maps pearson 1, max|A-B| 0; all two-field runs exit 0.
+- **`followup3_3573699/dead_inspect.log` read: the "dead" Keras networks have no dead neurons.** keras500 lags -30, 0, 120: `dead [0, 0]`,
+  h1 active shares 0.41-0.51, h2 0.71-0.88 for every neuron; yet `blocked_share` 1.000 (neg at -30 and 0, both classes at 120) and
+  `constant_share` 0.182 (-30 neg), 0.557 (0 neg), 0.595 / 0.187 (120 pos / neg). So the dead-ReLU hypothesis of 2026-11-11 is wrong: the
+  neurons fire, but no active last-hidden neuron has a positive contribution into that logit. Saved networks, neg blocked share per lag
+  -60..180: 0.063, 0.003, 0.255, 0.265, 0.216, 0.171, 0, 0, 0. Torch500: blocked only at lag 30 (0.268) and 60 (0.186) neg.
+- **3573842 profile read: inconclusive.** ~160 of 165 s of the print-freq-50 run was cold-node startup (`create_dynamic` 68 s, `dlopen` 15 s,
+  NetCDF `getitem` 25 s, `TF_ListPhysicalDevices` 14 s); the print-freq-100000 run (same node, warm) took 27 s. The 400 steps cost seconds in
+  both, so `model.predict` is not shown to be the problem at this size. **Follow-up job 3582278** (`gpu-a100-dev`,
+  `results/checks/check_oi_profile2.slurm`, not in git): warm-up run, then 400 and 3000 steps without prints and 3000 with print-freq 100;
+  log `results/checks/check_oi_profile2.3582278.out`, profiles `results/checks/oi_profile2_3582278/prof_*.txt`. If the 3000-step run costs
+  much more than 7.5x the 400-step one per step, something in the loop accumulates.
+- `maps_3573740/compare_maps.log` (Keras500 vs Torch500, old normalization): LRP-A1B0-B pos r 0.90-0.98 (lag 120 NaN: Keras blocked);
+  neg 0.56 (60), 0.69 (30), 0.73 (-60), 0.91-0.97 (90-180), NaN at -30, 0; composites >= 0.994; OI pos 0.94 (120), 0.988-0.995 elsewhere;
+  saved lag 0 OI old-loss Keras vs Torch r 0.988.
+- **'forcing' dataset (owner, 2026-11-14)**: a colleague (D. Apte) trains a CNN on precomputed wind-stress anomalies with the AMOC
+  at RAPID as the QoI (`/work/10027/dhruvapte26/vista/eccoXAI/sample_LRP_grid_improved_v2.py`). Owner: **one dataset at a time, never
+  combined with SST**; keep our frameworks; add AMOC as the QoI of the new dataset; check the grid index offset; measure how much
+  re-anomalizing the precomputed anomalies matters. Their files (read from the script, the folder itself was **not readable**:
+  `eccoXAI` lacks group read; the colleague must `chmod -R g+rX` it): `INPUT_FORCINGS/eccov4r5_7daylpf_daily_anomaly_about_366dayclimatology_{oceTAUE,oceTAUN}_Jan1992_Dec2021.data`
+  (>f4, (10958 days, n_wet), wet points only), `INPUT_FORCINGS/eccov4r5_iwetC2d.data` (>f4, compact (1170, 90) position of each
+  column), `INPUT_FORCINGS/rac_wet.bin` (>f8, cell areas), `TARGET_QoIs/..._RAPID_QoI_Jan1992_Dec2021.data` (>f4, (10958,)). 1992-2021,
+  not 2022. **Suspected bug in their placement**: their mask agrees with hFacC > 0 on only ~97.4% of cells, scattered, equal counts
+  both ways, hFacC = 1 there: the signature of 1-based positions used as 0-based (every value one cell off). Not verified.
+  - Code (on `multi_field`, **uncommitted**, compiles, **never run**): `eccov4r5_common.py`: `--dataset sst|forcing` (default sst,
+    the SST path unchanged), `--forcing-dir` (default `/work/07665/shrey911/ls6/LRP_eccov4r5_forcing_data`, a copy to make, see
+    below), `--forcing-anomalies as-is|reanomalize` (default as-is), `--fields` default per dataset (`DEFAULT_FIELDS`;
+    forcing: oceTAUE oceTAUN, any `<name>` of the file pattern works). `forcing_wetpoints` converts an index map once with
+    `ecco.llc_compact_to_tiles` (not the data) and **raises if any column lands on a dry hFacC cell**; `forcing_index_base`
+    detects 0- vs 1-based (the one whose positions are all wet in compact hFacC; raises if neither) and prints it. Forcing wet points are their own (all latitudes, no YC > -20). `load_forcing`;
+    `anomalize_new(..., num_years = 30)` for reanomalize (X and QoI). `class_weights(oneHotCost, n_test)`: SST keeps `N_TEST`,
+    forcing uses its own test size at the same `TEST_SPLIT_FRAC`. `run_experiment` now uses `make_context` (one data path).
+    `eccov4r5_negative_class_LRP.py`: the published-SST-map check is skipped for forcing.
+  - Jobs (submitted later the same day, see the table below): `results/checks/check_forcing_data.py` (worktree; base 0 vs 1 against
+    hFacC and against RAC vs rac_wet; variance anomalize_new removes, split into calendar-day mean and trend, per point; QoI class
+    flips), `results/checks/test_forcing.slurm` (gpu-a100 2 h: the check, SST old-vs-new identity incl. 3-epoch training,
+    every script with `--dataset forcing` both anomaly options), `results/checks/forcing_anomalies_full.slurm` (gpu-a100 16 h,
+    afterok of the test: Torch, 9 lags, 500 epochs, as-is vs reanomalize, metrics and map correlations).
+  - `test_forcing.slurm` now copies the five files into `LRP_eccov4r5_forcing_data/{INPUT_FORCINGS,TARGET_QoIs}` itself (once;
+    `cp -p`, partial copies removed) and `cmp`s their `GRID/hFacC.data` with ours; **if the colleague's folder is still unreadable
+    when it starts, it exits 1 at once** and 3582379 stays `DependencyNeverSatisfied`: get access, `scancel 3582379`, resubmit
+    both from the worktree (`cd /work/07665/shrey911/ls6/XAIRT_multi_field; T=$(sbatch --parsable
+    scripts_TomsQoI/results/checks/test_forcing.slurm); sbatch --dependency=afterok:$T scripts_TomsQoI/results/checks/forcing_anomalies_full.slurm`).
+
+### Queued 2026-11-14, the owner away again ("queue as many jobs as you want; maybe tackle some open questions")
+
+All logs in `scripts_TomsQoI/results/checks/` (main checkout unless noted). None of the new scripts has run yet.
+
+| job | partition, limit | what | answers | waits for |
+|---|---|---|---|---|
+| 3582278 | dev, 1.5 h | `check_oi_profile2.slurm`: Keras OI, warm-up, then 400 / 3000 steps without prints, 3000 with print-freq 100 (cProfile) | Keras OI slowness: does the per-step cost grow with the steps? Out `check_oi_profile2.3582278.out`, `oi_profile2_3582278/prof_*.txt` | - |
+| 3582364 | dev, 45 min | `rules_all_lags.slurm 0 --max-samples 50` into `rules_test/` | first run of `rules_all_lags.py` | - |
+| 3582365 | dev, 20 min | `rules_all_lags.slurm --summarize` of `rules_test/` | the summary/plot mode works | 3582364 ok |
+| 3582366-68 | gpu-a100, 8 h | `rules_all_lags.py` on the saved networks, lags -60 -30 0 / 30 60 90 / 120 150 180, all correctly predicted samples, into `rules_all_lags/` | (1) appendix bounds: A1B0-B (-1,1) vs training range vs no input rule, over all samples and lags; (2) negative class: do LRP-Z, epsilon, A2B1-IB, gradient x input give relevance where A1B0-B is all zero (`all_zero_share_on_a1b0_b_zero`), and does their mean map resemble the class composite (`corr_composite`)? | 3582365 ok |
+| 3582369 | gpu-a100, 1 h | `--summarize` of `rules_all_lags/`: tables per class and statistic in `rules_all_lags.3582369.out`, one figure per method and class (`<method>_<cls>.png`, 9 lags) | | 3582366-68 any |
+| 3582371-73 | gpu-a100, 4 h | `seeds_lrp.slurm keras 42/43/44`: `eccov4r5_LRP_A1B0_keras.py --seed`, full settings, into `seeds_lrp/keras_seed<s>/` | how much the maps (and the blocked classes) depend on the training seed; seed 42 redoes 3544560 with the new normalization | - |
+| 3582374-76 | gpu-a100, 4 h | the same, torch | the same for Torch; seed 42 redoes 3544561 | - |
+| 3582377 | gpu-a100, 30 min | `seeds_lrp.slurm --compare`: Pearson per map seed vs seed per backend and Keras vs Torch per seed, metrics, all-zero counts; `seeds_lrp/compare/compare_maps.log`, `seeds_lrp.3582377.out` | | 3582371-76 any |
+| 3582378 | gpu-a100, 2 h | worktree `test_forcing.slurm` (log in the worktree's `scripts_TomsQoI/results/checks/test_forcing.3582378.out`, run dir `forcing_3582378/`) | data copy; iwetC2d base (the check prints both bases, the loader prints the one used); variance re-anomalizing removes; SST identical to main (`same_as_main/compare_maps.log`: every map pearson 1, max 0); every script on `--dataset forcing`, both anomaly options | - |
+| 3582379 | gpu-a100, 16 h | worktree `forcing_anomalies_full.slurm`: Torch, 9 lags, 500 epochs, as-is vs reanomalize; `fanom_3582379/` | does re-anomalizing change accuracy and maps? The as-is run is also the first full wind-stress -> AMOC result | 3582378 ok |
+
+Notes: the seed jobs read the main checkout's scripts when they start; merging `multi_field` before then is harmless (the SST path is
+meant to be identical, which 3582378 checks) but do it only after 3582378 passed. The dev queue is full (3 jobs per user) until 3582278
+and the rules test finish. When back, read in this order: `rules_all_lags.3582369.out` (two open questions), `seeds_lrp/compare/compare_maps.log`,
+the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
+- A collaborator-facing summary of all conclusions was published (private until the owner shares it):
+  https://claude.ai/artifact/RngeEWQRRXVYxDvQsDX5gT (source in that session's scratchpad; republish from a new session by passing the URL).
 
 The three cases the owner asked for, for LRP and for OI: **Keras** (3544560 LRP, 3544568 OI), **Torch** (3544561 LRP, 3544570 OI), **Keras network
 with Torch XAI** (3544562 LRP, 3544569 OI).
