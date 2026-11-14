@@ -77,6 +77,20 @@ The shared modules are [eccov4r5_common.py](scripts_TomsQoI/eccov4r5_common.py) 
 
 The anomalies are the new ones: each calendar day is delinearized separately over the years. The old ones (one linear trend for the whole record) are not used anywhere.
 
+### Datasets and input fields
+
+Every script that trains or explains a network takes these options (`eccov4r5_common.py`); one dataset is used at a time.
+
+| Option | Meaning |
+|---|---|
+| `--dataset sst` (default) | The published experiment: SST anomalies of `SST_all.nc` (1992-2022) at the wet points north of 20°S; the QoI is the SST anomaly at the objective point (tile 10, j 1, i 43). |
+| `--dataset forcing` | Precomputed daily anomalies (7-day low-pass, about a 366-day climatology, 1992-2021) of `--forcing-dir` (`INPUT_FORCINGS/`, `TARGET_QoIs/`, as in D. Apte's setup); the QoI is the AMOC at RAPID. All latitudes. The wet-point positions of `eccov4r5_iwetC2d.data` are checked against `hFacC` (0- or 1-based is detected, a misplaced point is an error). The test set is the same fraction of the record as for SST. |
+| `--fields` | The input fields, side by side in X. `sst`: names of `FIELDS` (default `SST`). `forcing`: the `<name>` of its files (default `oceTAUE oceTAUN`). With several fields every map (relevance, OI, composite) is written per field, `<FIELD>_` in the variable and figure names; with one field the names are those of the single-SST experiment. |
+| `--field-scale none\|std` | `std` divides each field by its standard deviation, for fields in different units. |
+| `--forcing-anomalies as-is\|reanomalize` | `forcing` only: use the files' anomalies (default), or also remove each calendar day's mean and linear trend (`anomalize_new`), as for SST. |
+
+Networks trained on one dataset and set of fields only work with the same options (the input width differs). The data reader and the `results_viz` scripts are SST only.
+
 ## Fake data
 
 These need no ECCO data, so they are the quickest way to check an installation.

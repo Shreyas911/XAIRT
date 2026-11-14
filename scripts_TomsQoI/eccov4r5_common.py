@@ -77,14 +77,31 @@ def parse_args(backend, extra_args = None):
     p.add_argument("--epochs", type=int, default=500, help="use a small number to test the script")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-plots", action="store_true", help="do not save figures")
-    p.add_argument("--fields", nargs="+", default=["SST"], choices=sorted(FIELDS),
-                   help="input fields, side by side in X (see FIELDS); the QoI is always the SST one")
+    p.add_argument("--dataset", choices=sorted(DEFAULT_FIELDS), default="sst",
+                   help="'sst' (default): SST anomalies of SST_all.nc, the QoI is the SST anomaly at the objective point (the "
+                        "published experiment); 'forcing': the precomputed daily anomalies of --forcing-dir (e.g. wind stress), "
+                        "the QoI is the AMOC at RAPID. One dataset at a time, see load_anomalies")
+    p.add_argument("--fields", nargs="+", default=None,
+                   help="input fields of the dataset, side by side in X: for 'sst' the names of FIELDS (default SST), for "
+                        "'forcing' the <name> of its files (default oceTAUE oceTAUN)")
     p.add_argument("--field-scale", choices=["none", "std"], default="none",
                    help="divide each field's anomalies by their std over all grid points and days ('std'), so that fields "
                         "in different units are comparable; 'none' (default) keeps the published SST experiment")
+    p.add_argument("--forcing-dir", default=FORCING_DIR,
+                   help="directory with INPUT_FORCINGS/ and TARGET_QoIs/ of the 'forcing' dataset")
+    p.add_argument("--forcing-anomalies", choices=["as-is", "reanomalize"], default="as-is",
+                   help="'forcing' dataset: use the anomalies of the files as they are (default), or also remove the mean "
+                        "and linear trend of each calendar day with anomalize_new, as for SST")
     if extra_args is not None:
         extra_args(p)
-    return p.parse_args()
+    args = p.parse_args()
+    if args.fields is None:
+        args.fields = DEFAULT_FIELDS[args.dataset]
+    return args
+
+def data_kwargs(args):
+    """The keyword arguments of load_data / load_anomalies that choose the dataset."""
+    return dict(dataset = args.dataset, forcing_dir = args.forcing_dir, forcing_anomalies = args.forcing_anomalies)
 
 def add_model_args(parser, sources):
     """The options of the scripts that need a trained network for each lag (OI and analyze)."""
@@ -154,9 +171,9 @@ def anomalize_new(field, num_years = 31, first_leap_year_idx = 0):
 
     return field
 
-def load_data(r4_dir, r5_dir, fields = ('SST',), field_scale = 'none'):
+def load_data(r4_dir, r5_dir, fields = ('SST',), field_scale = 'none', **kwargs):
     """X, oneHotCost, wetpoints, XC, YC of load_data_with_y"""
-    X, y, oneHotCost, wetpoints, XC, YC = load_data_with_y(r4_dir, r5_dir, fields, field_scale)
+    X, y, oneHotCost, wetpoints, XC, YC = load_data_with_y(r4_dir, r5_dir, fields, field_scale, **kwargs)
     return X, oneHotCost, wetpoints, XC, YC
 
 # --- Input fields -------------------------------------------------------------------------
@@ -173,6 +190,72 @@ def load_sst(r4_dir, r5_dir):
 
 FIELDS = {'SST': load_sst}
 
+# --- The 'forcing' dataset ----------------------------------------------------------------
+#
+# Daily anomalies precomputed elsewhere (7-day low-pass, about a 366-day climatology), 1992-01-01 to 2021-12-31, one file per
+# field, and the AMOC at RAPID as the QoI. Laid out as in sample_LRP_grid_improved_v2.py (D. Apte), the example of these files:
+#   INPUT_FORCINGS/<FORCING_FILE of the field>   big-endian float32, (FORCING_N_DAYS, n_wet), the wet points only
+#   INPUT_FORCINGS/eccov4r5_iwetC2d.data          big-endian float32, (n_wet,), the position of each column in the flat compact
+#                                                 (1170, 90) LLC90 array, counted from 0 or 1 (forcing_index_base)
+#   TARGET_QoIs/<FORCING_QOI_FILE>                big-endian float32, (FORCING_N_DAYS,)
+# The wet points are the dataset's own (all latitudes), not the SST ones (YC > -20).
+
+DEFAULT_FIELDS = {'sst': ['SST'], 'forcing': ['oceTAUE', 'oceTAUN']}
+FORCING_DIR = "/work/07665/shrey911/ls6/LRP_eccov4r5_forcing_data"
+FORCING_FILE = "eccov4r5_7daylpf_daily_anomaly_about_366dayclimatology_{}_Jan1992_Dec2021.data"
+FORCING_QOI_FILE = FORCING_FILE.format("RAPID_QoI")
+FORCING_N_DAYS = 10958
+FORCING_N_YEARS = 30
+def forcing_index_base(position, grid_dir):
+    """
+    0 or 1, whichever puts every position on a wet cell of hFacC (surface level, compact layout). The example script used 0
+    and found ~2.6% of the cells misplaced, the pattern of a 1-based index read as 0-based; see results/checks/check_forcing_data.py
+    (multi_field worktree). Raises if neither base does.
+    """
+    n_cells = int(np.prod(LLC_SHAPE))
+    wet = np.fromfile(join(grid_dir, 'hFacC.data'), dtype = '>f4')[:n_cells] > 0
+    for base in (0, 1):
+        p = position - base
+        if p.min() >= 0 and p.max() < n_cells and wet[p].all():
+            print(f"forcing files: iwetC2d positions are {base}-based (all {len(p)} on wet cells)")
+            return base
+    raise ValueError("iwetC2d positions fall on dry hFacC cells for both base 0 and base 1")
+
+def forcing_wetpoints(forcing_dir, grid_dir):
+    """
+    The wet points (tile, j, i index arrays, the order of np.nonzero as for SST) of the forcing files, and for each of them the
+    column of the files.
+    """
+    position = np.fromfile(join(forcing_dir, 'INPUT_FORCINGS', 'eccov4r5_iwetC2d.data'), dtype = '>f4').astype(np.int64)
+    position -= forcing_index_base(position, grid_dir)
+    column = np.full(np.prod(LLC_SHAPE), -1.0)
+    column[position] = np.arange(len(position))
+    column = np.rint(ecco.llc_compact_to_tiles(column.reshape(LLC_SHAPE[0]*LLC_SHAPE[1], LLC_SHAPE[2]),
+                                               less_output = True)).astype(np.int64)
+    wetpoints = np.nonzero(column >= 0)
+
+    hFacC = ecco.read_llc_to_tiles(grid_dir, 'hFacC.data', less_output = True)
+    n_dry = int((hFacC[wetpoints] <= 0).sum())
+    if n_dry > 0:
+        raise ValueError(f"{n_dry} of {len(position)} wet points of the forcing files are dry in hFacC after the compact -> tiles "
+                         f"conversion")
+    return wetpoints, column[wetpoints]
+
+def load_forcing(forcing_dir, grid_dir, fields, forcing_anomalies):
+    """X parts (one (days, n_wet) array per field), the QoI (days,) and the wetpoints of the 'forcing' dataset."""
+    wetpoints, columns = forcing_wetpoints(forcing_dir, grid_dir)
+    parts = []
+    for name in fields:
+        flat = np.fromfile(join(forcing_dir, 'INPUT_FORCINGS', FORCING_FILE.format(name)), dtype = '>f4')
+        parts.append(flat.reshape(FORCING_N_DAYS, -1)[:, columns].astype(np.float32))
+    y_full = np.fromfile(join(forcing_dir, 'TARGET_QoIs', FORCING_QOI_FILE), dtype = '>f4').astype(np.float32)
+    if len(y_full) != FORCING_N_DAYS:
+        raise ValueError(f"the QoI has {len(y_full)} days, expected {FORCING_N_DAYS}")
+    if forcing_anomalies == 'reanomalize':
+        parts = [anomalize_new(part, num_years = FORCING_N_YEARS) for part in parts]
+        y_full = anomalize_new(y_full, num_years = FORCING_N_YEARS)
+    return parts, y_full, wetpoints
+
 def field_maps(values, wetpoints, fields):
     """
     (len(fields)*n_wet,) -> [(tag, (13, 90, 90) map)], one per field, tag '' for a single field (the names of the single-SST
@@ -185,11 +268,13 @@ def field_maps(values, wetpoints, fields):
         return [('', to_llc(values, wetpoints))]
     return [(f'{field}_', to_llc(values[k*n:(k+1)*n], wetpoints)) for k, field in enumerate(fields)]
 
-def load_anomalies(r4_dir, r5_dir, fields = ('SST',), field_scale = 'none'):
+def load_anomalies(r4_dir, r5_dir, fields = ('SST',), field_scale = 'none', dataset = 'sst', forcing_dir = FORCING_DIR,
+                   forcing_anomalies = 'as-is'):
     """
     Returns X_full (days, len(fields)*wetpoints) of the new anomalies of the input fields (see FIELDS), y_full (days,) of the
     QoI, the SST anomaly at the grid point of the objective function, the indices of the wetpoints and XC, YC for plotting.
     With field_scale 'std' each field's anomalies are divided by their std over all wet points and days.
+    With dataset 'forcing' the fields, the QoI (the AMOC at RAPID) and the wet points are those of load_forcing.
 
     The notebook also read the mds SST files with xmitgcm and built a number of DataArrays
     (masks, X, y, ...) that the results never used, only XC and YC are still needed.
@@ -197,14 +282,6 @@ def load_anomalies(r4_dir, r5_dir, fields = ('SST',), field_scale = 'none'):
 
     gridDir = join(r5_dir, 'GRID')
     ds_r4 = xr.open_dataset(join(r4_dir, 'thetaSurfECCOv4r4.nc'))
-    SST = load_sst(r4_dir, r5_dir)
-
-    hFacC = ecco.read_llc_to_tiles(gridDir, 'hFacC.data')
-    hFacC_mask = (hFacC > 0).astype(float)
-
-    latMask = (ds_r4['YC'].data > -20.0).astype(float)
-    maskFinal = hFacC_mask * latMask
-    wetpoints = np.nonzero(maskFinal)
 
     def llc_dataarray(data):
         return xr.DataArray(data = data,
@@ -214,6 +291,22 @@ def load_anomalies(r4_dir, r5_dir, fields = ('SST',), field_scale = 'none'):
                                           i    = ds_r4['i'].data))
     XC = llc_dataarray(ds_r4['XC'].data)
     YC = llc_dataarray(ds_r4['YC'].data)
+
+    if dataset == 'forcing':
+        parts, y_full, wetpoints = load_forcing(forcing_dir, gridDir, fields, forcing_anomalies)
+        if field_scale == 'std':
+            parts = [part / np.std(part) for part in parts]
+        X_full = parts[0] if len(parts) == 1 else np.concatenate(parts, axis = 1)
+        return X_full, y_full, wetpoints, XC, YC
+
+    SST = load_sst(r4_dir, r5_dir)
+
+    hFacC = ecco.read_llc_to_tiles(gridDir, 'hFacC.data')
+    hFacC_mask = (hFacC > 0).astype(float)
+
+    latMask = (ds_r4['YC'].data > -20.0).astype(float)
+    maskFinal = hFacC_mask * latMask
+    wetpoints = np.nonzero(maskFinal)
 
     parts = []
     for name in fields:
@@ -247,13 +340,14 @@ def make_qoi(X_full, y_full):
 
     return X, y, oneHotCost
 
-def load_data_with_y(r4_dir, r5_dir, fields = ("SST",), field_scale = "none"):
+def load_data_with_y(r4_dir, r5_dir, fields = ("SST",), field_scale = "none", **kwargs):
     """
     Returns X (samples, len(fields)*wetpoints) of the anomalies, the QoI y (samples,) before it is made a class, the one-hot QoI
-    (samples, 2) as float32, the indices of the wetpoints and XC, YC for plotting, see make_qoi.
+    (samples, 2) as float32, the indices of the wetpoints and XC, YC for plotting, see make_qoi. kwargs choose the dataset, see
+    load_anomalies.
     """
 
-    X_full, y_full, wetpoints, XC, YC = load_anomalies(r4_dir, r5_dir, fields, field_scale)
+    X_full, y_full, wetpoints, XC, YC = load_anomalies(r4_dir, r5_dir, fields, field_scale, **kwargs)
     X, y, oneHotCost = make_qoi(X_full, y_full)
 
     return X, y, oneHotCost, wetpoints, XC, YC
@@ -268,11 +362,14 @@ def make_context(args):
     models_dir = join(args.out_dir, 'models')
     os.makedirs(models_dir, exist_ok = True)
 
-    X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir, args.fields, args.field_scale)
+    X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir, args.fields, args.field_scale, **data_kwargs(args))
+    idx = int(X.shape[0]*(1-TEST_SPLIT_FRAC))
+    # The SST test set is the notebook's last N_TEST samples; another dataset keeps the same test fraction
+    n_test = N_TEST if args.dataset == 'sst' else X.shape[0] - idx
     return types.SimpleNamespace(X = X, oneHotCost = oneHotCost, wetpoints = wetpoints, XC = XC, YC = YC, fields = list(args.fields),
                                  layers = make_layers(X.shape[1]),
-                                 class_weight = class_weights(oneHotCost),
-                                 idx = int(X.shape[0]*(1-TEST_SPLIT_FRAC)),
+                                 class_weight = class_weights(oneHotCost, n_test),
+                                 idx = idx,
                                  models_dir = models_dir)
 
 def train_on_lag(ctx, lag, train_fn):
@@ -281,8 +378,8 @@ def train_on_lag(ctx, lag, train_fn):
     model, _ = train_fn(x_t, y_t, x_v, y_v, lag, ctx.layers, ctx.class_weight, ctx.models_dir)
     return model
 
-def class_weights(oneHotCost):
-    train = oneHotCost[:-N_TEST]
+def class_weights(oneHotCost, n_test = N_TEST):
+    train = oneHotCost[:-n_test]
     weight_for_pos = len(train[:,0]) / np.sum(train[:,0])
     weight_for_neg = len(train[:,1]) / np.sum(train[:,1])
     return {0: float(weight_for_pos), 1: float(weight_for_neg)}
@@ -358,15 +455,9 @@ def run_experiment(backend, args, train_fn, predict_fn, explain_fn, methods):
       explain_fn(model_for_xai, method, samples) -> relevance (samples, wetpoints)
     """
 
-    os.makedirs(args.out_dir, exist_ok = True)
-    models_dir = join(args.out_dir, 'models')
-    os.makedirs(models_dir, exist_ok = True)
-
-    X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir, args.fields, args.field_scale)
-    layers = make_layers(X.shape[1])
-    class_weight = class_weights(oneHotCost)
-
-    idx = int(X.shape[0]*(1-TEST_SPLIT_FRAC))
+    ctx = make_context(args)
+    X, oneHotCost, wetpoints, XC, YC = ctx.X, ctx.oneHotCost, ctx.wetpoints, ctx.XC, ctx.YC
+    layers, class_weight, idx, models_dir = ctx.layers, ctx.class_weight, ctx.idx, ctx.models_dir
 
     results = {}
     for lag in args.lags:

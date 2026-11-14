@@ -120,7 +120,9 @@ if __name__ == "__main__":
     get_model = keras_script.make_get_model(args)
     results = {}
 
-    if exists(args.published):
+    if args.dataset != 'sst':
+        print(f"Dataset {args.dataset}: the published (SST) maps are not checked")
+    elif exists(args.published):
         # Share of the wet points (the inputs of the network) that are NaN in each map; land and the masked latitudes are NaN anyway
         ds = xr.open_dataset(args.published)
         results['published_nan_share_of_wetpoints'] = {}
