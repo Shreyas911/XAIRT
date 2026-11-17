@@ -247,7 +247,13 @@ def load_forcing(forcing_dir, grid_dir, fields, forcing_anomalies):
     parts = []
     for name in fields:
         flat = np.fromfile(join(forcing_dir, 'INPUT_FORCINGS', FORCING_FILE.format(name)), dtype = '>f4')
-        parts.append(flat.reshape(FORCING_N_DAYS, -1)[:, columns].astype(np.float32))
+        part = flat.reshape(FORCING_N_DAYS, -1)[:, columns].astype(np.float32)
+        n_bad = int((~np.isfinite(part)).sum())
+        if n_bad:
+            # As the example script (np.nan_to_num); a network cannot take NaN
+            print(f"forcing field {name}: {n_bad} non-finite values ({n_bad/part.size:.2e} of all) set to 0")
+            part = np.nan_to_num(part, nan = 0.0, posinf = 0.0, neginf = 0.0)
+        parts.append(part)
     y_full = np.fromfile(join(forcing_dir, 'TARGET_QoIs', FORCING_QOI_FILE), dtype = '>f4').astype(np.float32)
     if len(y_full) != FORCING_N_DAYS:
         raise ValueError(f"the QoI has {len(y_full)} days, expected {FORCING_N_DAYS}")
