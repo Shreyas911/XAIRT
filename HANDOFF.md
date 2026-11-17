@@ -601,6 +601,61 @@ All logs in `scripts_TomsQoI/results/checks/` (main checkout unless noted). None
 | 3582378 | gpu-a100, 2 h | worktree `test_forcing.slurm` (log in the worktree's `scripts_TomsQoI/results/checks/test_forcing.3582378.out`, run dir `forcing_3582378/`) | data copy; iwetC2d base (the check prints both bases, the loader prints the one used); variance re-anomalizing removes; SST identical to main (`same_as_main/compare_maps.log`: every map pearson 1, max 0); every script on `--dataset forcing`, both anomaly options | - |
 | 3582379 | gpu-a100, 16 h | worktree `forcing_anomalies_full.slurm`: Torch, 9 lags, 500 epochs, as-is vs reanomalize; `fanom_3582379/` | does re-anomalizing change accuracy and maps? The as-is run is also the first full wind-stress -> AMOC result | 3582378 ok |
 
+### 2026-11-16: Nov 11 jobs finished, forcing data copied, Torch full pipeline queued
+
+- **The colleague's folder became readable (2026-11-16).** Copied all of `INPUT_FORCINGS/` (9 fields of 2.66 GB, 60646 wet points x
+  10958 days: atmPload, oceFWflx, oceQnet, oceQsw, oceSPflx, oceSflux, oceTAUE, oceTAUN, sIceLoad; `iwetC2d`, `rac_wet.bin`) and
+  `TARGET_QoIs/` (RAPID QoI) to `/work/07665/shrey911/ls6/LRP_eccov4r5_forcing_data/` (23 GB), every file `cmp`-identical to the
+  source; their `GRID/hFacC.data` is identical to ours. 3582378 will find the copy and skip copying.
+- **All 12 Nov 11 gpu-a100 jobs COMPLETED, every run exit 0** (3573742, the final map comparison, still pending). Checked that the
+  long ones ran to the end (e.g. 3573734 Keras OI reached iteration 10000 at all lags in 425 s; negative_class all 9 lags).
+  - `LRP_compare_saved_all` (3573731): published networks, all 9 lags, Keras vs Torch Pearson 1.0000 for every map (both methods,
+    both classes), max probability difference 1.7-2.1e-6. 22 non-finite positive samples at one lag, identical in both libraries.
+  - **Dead/blocked Keras networks, seed study (3573700):** whole-class blocked (`blocked_share` 1.000) in Keras graph+TF32 (as the
+    LRP script) 3 of 15 networks (seed 42 lags 0 and 30 neg, seed 44 lag 0 neg), Keras eager + no TF32 2 of 9 (seed 44 lags -30
+    and 0 neg), **Torch 0 of 15** (max 0.275, lag 30 neg). So it is Keras training, neither one seed nor graph mode/TF32. **Keras
+    training is not reproducible**: seed 42 now blocks lags 0 and 30, 3544560 (same seed) blocked -30, 0 and 120; Torch seed 42
+    reproduces 3544561's blocked shares exactly (lag 30 0.268, lag 60 0.186). Neurons are not dead in any of them.
+  - **Keras OI speed: resolved.** `check_oi_profile2` (3582278): warm-up (1 step, cold node) 336 s, then 400 steps 30 s, 3000 steps
+    31 s, 3000 with prints every 100 32 s. The slowness was cold-node startup (library loading, data read); the steps are cheap.
+  - Rules test (3582364/65) passed; preliminary (lag 0, first 50 neg samples, not representative): LRP-Z, epsilon and
+    gradient x input are all-zero on the same 38% of samples as A1B0-B, i.e. the logit is locally constant there, so no attribution
+    method can explain those samples. The full jobs 3582366-69 decide.
+- **Torch full pipeline (owner: all earlier results for Torch, OI and LRP)**: `results/checks/torch_full_pipeline.slurm` (not in git):
+  data reader plots; `LRP_torch` (train 9 lags, 500 epochs, seed 42, new normalization); OI of those networks and of the published
+  networks in Torch (notebook settings); analyze (qoi_pred, accuracy/F1 whole/train/test) for both; `results_viz_new` figures (per lag
+  and per result, correlation) and `results_viz_qoi_pred`. First runs of `eccov4r5_dataReader.py` (plots), `eccov4r5_analyze_torch.py`,
+  `eccov4r5_results_viz_new.py`, `results_viz_qoi_pred.py`. **3587997** (dev, test: lags 0 60, 3 epochs, 20 OI steps, run dir
+  `results/checks/torch_pipeline_test/`) then **3587998** (gpu-a100, 4 h, `afterok`, run dir **`scripts_TomsQoI/results/torch_full_sst/`**;
+  log `results/checks/torch_full_pipeline.<id>.out`, one line per step and the list of figures). If the test fails, 3587998 stays
+  `DependencyNeverSatisfied`: fix, `scancel`, resubmit both (commands in the header of the slurm file).
+
+**Standing task from the owner (2026-11-16): get the forcing dataset to its full run.** Whatever breaks in 3582378 (the forcing test)
+or 3582379 (the full run): read the logs (`<worktree>/scripts_TomsQoI/results/checks/test_forcing.<id>.out`, the per-step `.log` in
+`forcing_<id>/`), fix the code on `multi_field`, resubmit the test and the full run (`afterok`), and repeat until the full run has
+finished, **with both kinds of anomalies** (`--forcing-anomalies as-is` and `reanomalize`, as `forcing_anomalies_full.slurm` does),
+then report accuracy/F1 per lag and the map comparison of the two. Small tests may go to `gpu-a100-dev`, the full run to `gpu-a100`.
+
+**Forcing jobs, 2026-11-16 (owner: "throw in as many jobs as needed, the wait times are long")**: no longer chained behind the test,
+so they start as soon as nodes free up; if the code is broken they fail fast and the test logs say why. **3582379 was cancelled**
+(replaced by 3588019-21, run in parallel). `load_forcing` now sets non-finite values to 0 and prints how many (as the colleague's
+`nan_to_num`). New `<worktree>/scripts_TomsQoI/results/checks/forcing_pipeline.slurm` (not in git): Torch, 9 lags, 500 epochs:
+LRP_torch, OI_torch (both classes, 10000 steps), analyze_torch, results_viz_qoi_pred; output `<worktree>/scripts_TomsQoI/results/forcing_<name>_<jobid>/`,
+log `results/checks/forcing_pipeline.<jobid>.out` (worktree).
+
+| job | what |
+|---|---|
+| 3582378 | forcing test, gpu-a100 (kept as is) |
+| 3588018 | the same test on gpu-a100-dev (starts sooner); log `test_forcing.3588018.out`, run dir `forcing_3588018/` |
+| 3588019 | `wind_asis`: oceTAUE oceTAUN, as-is, no scaling (**the main wind -> AMOC result**) |
+| 3588020 | `wind_reanom`: the same, reanomalized |
+| 3588021 | `--compare` of 3588019 and 3588020 (maps and metrics; `forcing_anomalies_<id>/`), afterany |
+| 3588022 / 3588023 | oceTAUE only / oceTAUN only, as-is |
+| 3588024 | `buoyancy`: oceQnet oceFWflx, as-is, `--field-scale std` (different units) |
+| 3588025 | `all9`: all nine fields, as-is, std, 40 h limit (545k inputs, ~24 GB of X in memory; may run out of GPU/CPU memory: if so, fix the trainer's data handling or drop fields) |
+
+If any fails: read its `.out` and the step `.log`, fix on `multi_field`, resubmit with the same arguments (in the table's names).
+
 Notes: the seed jobs read the main checkout's scripts when they start; merging `multi_field` before then is harmless (the SST path is
 meant to be identical, which 3582378 checks) but do it only after 3582378 passed. The dev queue is full (3 jobs per user) until 3582278
 and the rules test finish. When back, read in this order: `rules_all_lags.3582369.out` (two open questions), `seeds_lrp/compare/compare_maps.log`,
