@@ -656,6 +656,54 @@ log `results/checks/forcing_pipeline.<jobid>.out` (worktree).
 
 If any fails: read its `.out` and the step `.log`, fix on `multi_field`, resubmit with the same arguments (in the table's names).
 
+### 2026-11-18: results and fixes
+
+- **iwetC2d is 1-based, confirmed** (forcing test 3588018, `check_data.log`): base 1: all 60646 positions wet, agreement with hFacC > 0
+  100.000%, RAC at the positions = `rac_wet.bin` to 5.9e-8 for every point; base 0 (the colleague's script): 1378 on dry cells,
+  agreement 97.383% (his ~97.4%), RAC matches 35.6%. So the colleague's maps are shifted by one cell. Our loader detected base 1.
+- Forcing tests 3582378 and 3588018 FAILED only in `check_data` (NaN in `anomalize_new`): every other step exit 0, SST identical to
+  main (`same_as_main`), every script runs on `--dataset forcing` with both anomaly options. oceTAUE and oceTAUN each have **2227
+  columns NaN on every day** (24403466 values, 3.67%); the loader sets them to 0. `check_forcing_data.py` now drops all-NaN columns
+  (and zeroes other NaN); rerun alone: **3591817** (dev, `check_forcing_data.slurm`, log `check_forcing_data.3591817.out`), gives
+  the re-anomalizing variance numbers.
+- **The unscaled forcing runs did not learn**: 3588022 (tauE) and 3588023 (tauN) completed, but accuracy ~0.52 and F1 0 at every
+  lag (one class predicted for all samples); val loss 0.693 = ln 2 throughout training, also in 3588019 (wind, running). Diagnosis:
+  wind-stress anomalies have std 0.076 N/m^2, and the first layer's L2 penalty of 10 (tuned for SST in degC) forbids the large
+  weights they would need. **Cancelled 3588019, 3588020, 3588021**; resubmitted with `--field-scale std`: **3591820** `wind_asis_std`,
+  **3591821** `wind_reanom_std`, **3591822** compare (afterany), **3591823** `tauE_std`, **3591824** `tauN_std`. 3588024 (buoyancy)
+  and 3588025 (all9) already use std, kept. Quick check that std learns: **3591819** (dev, `check_forcing_learns.slurm`, lag 0,
+  100 epochs, wind and tauE; log `check_forcing_learns.3591819.out`): val loss must fall clearly below 0.693. If it does not, the
+  problem is deeper (L2 of 10 on 60k-121k inputs, learning rate, or little skill), and the std runs will also fail: then try a
+  smaller first-layer L2 (make_layers) and say so to the owner.
+- **Rules on all samples (3582366-68 done; summary 3582369 pending)**, published networks, all 9 lags:
+  - Bounds: map Pearson Bounded(-1,1) vs Bounded(training range) **0.94-0.96 positive, 0.86-0.90 negative**; vs no input rule
+    0.92-0.95 / 0.91-0.96. Over all samples the bounds matter less than the first-400 check said (0.78-0.90), but not nothing.
+  - Negative class: A1B0-B all-zero 0.17-0.27 at lags 0-90 (0.06 at -60, ~0 elsewhere). **LRP-Z, epsilon and gradient x input
+    (identical, as expected for these networks) leave only 0.00-0.05 all-zero**: 81-95% of the A1B0-B-zero samples get relevance
+    from them. So most blocked samples are not locally constant: A1B0 discards their (negative) contributions. The 38% of the
+    50-sample test was not representative. A2B1-IB gives the same zero shares as Z. Signed rules: 32-49% of the relevance mass
+    negative. Mean-map correlation with the class composite: A1B0-B -0.19 to -0.39 (neg), +0.21 to +0.46 (pos); Z similar.
+- **Seed runs (3582371-76 done; compare 3582377 pending)**: classes with all-zero relevance in every sample ("i.e. 100.0 %" lines):
+  Keras seed 42: 8 lines, 43: 2, 44: 2; Torch: 0 for every seed. Accuracy per lag: Keras 0.906-0.943, Torch 0.906-0.946, every seed.
+- **Hedge against the L2 diagnosis being incomplete (owner: "submit as many jobs as needed to finish asap, I can't check every
+  day")**: new option `--l2-first` (`eccov4r5_common.py`, default 10.0 = published SST; `make_layers(n_features, l2_first)`), and
+  `forcing_pipeline.slurm` passes `EXTRA` from the environment (`sbatch --export=ALL,EXTRA="--l2-first 0.1" ...`). All with
+  `--field-scale std`, Torch, full settings; run dirs `<worktree>/scripts_TomsQoI/results/forcing_<name>_<jobid>/`:
+
+  | L2 first layer | wind as-is | wind reanomalized | compare | tauE | tauN | buoyancy (Qnet+FWflx) | all 9 |
+  |---|---|---|---|---|---|---|---|
+  | 10 | 3591820 | 3591821 | 3591822 | 3591823 | 3591824 | 3588024 | 3588025 |
+  | 1 | 3591828 | 3591829 | 3591830 | 3591837 | 3591838 | 3591839 | |
+  | 0.1 | 3591831 | 3591832 | 3591833 | 3591840 | 3591841 | 3591842 | 3591843 |
+  | 0.01 | 3591834 | 3591835 | 3591836 | | | | |
+
+  **3591844** (`forcing_summary.slurm`, afterany of all of them): one table of accuracy/F1 per lag for every forcing run, with
+  "learned: True/False"; log `<worktree>/scripts_TomsQoI/results/checks/forcing_summary.3591844.out`. **Read that first.** Pick
+  the L2 that learns best (highest test-period accuracy without collapse); its as-is vs reanomalized compare answers the anomaly
+  question. If none learns at any L2: the problem is not the penalty (check the QoI alignment, the class balance, the learning rate).
+- **Torch SST pipeline test 3587997 passed**: every step exit 0, 27 figures (first runs of the data reader plots,
+  `eccov4r5_analyze_torch.py`, `eccov4r5_results_viz_new.py`, `results_viz_qoi_pred.py`); full run 3587998 pending.
+
 Notes: the seed jobs read the main checkout's scripts when they start; merging `multi_field` before then is harmless (the SST path is
 meant to be identical, which 3582378 checks) but do it only after 3582378 passed. The dev queue is full (3 jobs per user) until 3582278
 and the rules test finish. When back, read in this order: `rules_all_lags.3582369.out` (two open questions), `seeds_lrp/compare/compare_maps.log`,
