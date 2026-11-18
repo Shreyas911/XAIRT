@@ -38,10 +38,11 @@ BATCH_SIZE = 128
 LOSSES = [{'kind': 'categorical_crossentropy', 'weight': 1.0}]
 NORMALIZE = {'bool_': True, 'kind': 'MaxAbs'}
 
-def make_layers(n_features):
+def make_layers(n_features, l2_first = 10.0):
+    """l2_first: the L2 penalty of the first hidden layer, 10 in the published SST experiment (--l2-first)."""
     return [{'size': n_features, 'activation': None     , 'use_bias': None},
             {'size': 8         , 'activation': 'relu'   , 'use_bias': True,
-             'l1_w_reg': 0.0, 'l1_b_reg': 0.0, 'l2_w_reg': 10.0, 'l2_b_reg': 10.0},
+             'l1_w_reg': 0.0, 'l1_b_reg': 0.0, 'l2_w_reg': l2_first, 'l2_b_reg': l2_first},
             {'size': 8         , 'activation': 'relu'   , 'use_bias': True,
              'l1_w_reg': 0.0, 'l1_b_reg': 0.0, 'l2_w_reg': 0.01, 'l2_b_reg': 0.01},
             {'size': 2         , 'activation': 'softmax', 'use_bias': True,
@@ -87,6 +88,9 @@ def parse_args(backend, extra_args = None):
     p.add_argument("--field-scale", choices=["none", "std"], default="none",
                    help="divide each field's anomalies by their std over all grid points and days ('std'), so that fields "
                         "in different units are comparable; 'none' (default) keeps the published SST experiment")
+    p.add_argument("--l2-first", type=float, default=10.0,
+                   help="L2 penalty of the first hidden layer's weights and biases; 10 (default) is the published SST experiment. "
+                        "The forcing fields did not learn with 10 (2026-11-18), see HANDOFF")
     p.add_argument("--forcing-dir", default=FORCING_DIR,
                    help="directory with INPUT_FORCINGS/ and TARGET_QoIs/ of the 'forcing' dataset")
     p.add_argument("--forcing-anomalies", choices=["as-is", "reanomalize"], default="as-is",
@@ -373,7 +377,7 @@ def make_context(args):
     # The SST test set is the notebook's last N_TEST samples; another dataset keeps the same test fraction
     n_test = N_TEST if args.dataset == 'sst' else X.shape[0] - idx
     return types.SimpleNamespace(X = X, oneHotCost = oneHotCost, wetpoints = wetpoints, XC = XC, YC = YC, fields = list(args.fields),
-                                 layers = make_layers(X.shape[1]),
+                                 layers = make_layers(X.shape[1], args.l2_first),
                                  class_weight = class_weights(oneHotCost, n_test),
                                  idx = idx,
                                  models_dir = models_dir)
