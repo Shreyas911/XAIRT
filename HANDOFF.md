@@ -708,6 +708,65 @@ Notes: the seed jobs read the main checkout's scripts when they start; merging `
 meant to be identical, which 3582378 checks) but do it only after 3582378 passed. The dev queue is full (3 jobs per user) until 3582278
 and the rules test finish. When back, read in this order: `rules_all_lags.3582369.out` (two open questions), `seeds_lrp/compare/compare_maps.log`,
 the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
+- **2026-11-21, read by a new session (the original long session, 3cf0f372, resumed): all jobs above finished except the four as-is vs
+  reanomalized compares 3591822 / 3591830 / 3591833 / 3591836 (pending), all9 at L2 0.1 3591843 (running, 2.6 h at 01:18) and the
+  summary 3591844 (afterany). Every finished one exit 0 except the two forcing tests (known, `check_data` only).**
+  - **The forcing networks do not generalize.** The 0.89-0.94 "accuracy" of `metrics_torch.json` / `run_experiment` is over *all*
+    samples, training included. `analyze_torch.log` of each run splits it: **train 94-100%, test 43-63%** at every lag for wind (as-is),
+    tauE, tauN, buoyancy and all9, at every L2 (10, 1, 0.1, 0.01). The test-period majority class is about 55% (the unscaled tauE/tauN
+    runs, which predict one class, score 54-57% on test), so these are at or below a constant predictor. Best: **wind reanomalized,
+    lag 0: test 67-71%** (L2 10 std 71, L2 1 69, L2 0.1 67, L2 0.01 68); other reanomalized lags 48-59. Per run, test accuracy per
+    lag -60..180 (%):
+    wind as-is std (L2 10) 53 56 63 51 47 46 48 48 52; wind reanom std 59 57 71 57 52 53 54 48 53; tauE std 55 56 62 51 49 48 47 47 52;
+    tauN std 51 56 60 50 47 50 53 46 54; buoyancy 46 52 48 53 50 42 50 49 49; all9 54 59 54 47 46 44 48 46 46.
+    So "learned" in the summary job 3591844 (which reads the all-sample accuracy) will say True for runs that only memorised.
+  - **The published SST setup overfits too**, less: Torch SST (`results/torch_full_sst/analyze_torch.log`, 500 epochs, seed 42):
+    train 99.0-99.5%, test 61 58 67 67 66 54 59 73 68 (lags -60..180); the published networks in Torch
+    (`analyze_torch_published.log`): train 99.4-99.6%, test 62 56 67 67 67 58 62 72 68. Above the ~55% baseline at most lags, but far
+    from the ~0.93 all-sample accuracy quoted so far.
+  - **Likely reason the checkpoint does not stop it**: the validation set is a *shuffled random* 20% of the training period
+    (`split_lag`, `train_test_split(shuffle=True)`), and daily anomalies (and the 61-day running-mean QoI) are strongly autocorrelated,
+    so every validation day has near-copies in training: val loss measures interpolation, not generalization, and keeps improving to
+    epoch 500. A blocked (contiguous) validation period, or a gap between train/val/test, is the standard fix. Not changed: it alters
+    the published experiment, the owner decides. Also an option for forcing: far fewer inputs (60k-121k inputs for ~8k samples).
+- **2026-11-21, owner: "Try both runs with a contiguous separate validation, and also the current way. I want to see the LRP plots
+  for both, so 2 sets of plots for SST and forcing each; within forcing both normal and re-anomalization" and "do whatever is needed
+  to prevent overfit and still get decent results".** Done on `multi_field` (worktree), commit "Contiguous validation, input
+  coarsening, train/val/test metrics":
+  - `--val-split shuffled|contiguous` (default `shuffled` = the published experiment) and `--val-gap` (default 60 days):
+    `split_lag(..., mode, gap)`; contiguous = train | gap | last 20% of the training period as validation | gap | test, so no
+    validation day has a neighbour in training or test; `split_for(ctx, lag)` used by `run_experiment`, `train_on_lag`,
+    `eccov4r5_dead_neurons.py`.
+  - `--coarsen k` (default 1 = none): `coarse_index` groups the wet points by k x k blocks of each tile (wet cells only),
+    `coarsen_fields` averages X per field (sparse matrix) in `make_context` (`ctx.coarse = (index, m)`; prints
+    "coarsened kxk: n -> m inputs"); `field_maps(..., coarse)` draws every map (LRP, OI, composites, compare) back on the full grid,
+    each wet cell at its block's value. Against overfitting: k^2 fewer inputs (SST 31811 -> ~3.5k at k 3, ~0.9k at k 6).
+  - `run_experiment` metrics now also have `Train_/Val_/Test_Accuracy`, `_F1` and `Test_Majority` (the test-period majority-class
+    share, the baseline to beat), printed per lag as "lag L: accuracy train .., val .., test .. (majority ..)". Defaults leave the
+    published path unchanged (only extra metric keys; `f1_score(zero_division=0)` in the new ones).
+  - Runs (Torch, 500 epochs, seed 42, all 9 lags, LRP + OI + analyze per run), via the new one-off
+    `<worktree>/scripts_TomsQoI/results/checks/gen_pipeline.slurm <name> [test] -- <options>` (output
+    `<worktree>/scripts_TomsQoI/results/gen_<name>_<jobid>/`, log `results/checks/gen_pipeline.<jobid>.out`):
+    tests **3601307** (SST) and **3601308** (forcing reanomalized), dev, lags 0 60, 3 epochs, contiguous, L2 1, coarsen 3; then the
+    grid, all `--val-split contiguous`, **afterok of both tests**: L2 {10, 1, 0.1} x coarsen {1, 3, 6} for SST (3601309-3601317), forcing
+    wind (oceTAUE oceTAUN, std) as-is (3601318-3601326) and reanomalized (3601327-3601334, and L2 0.1 coarsen 6 submitted later, see
+    below). Order within each dataset: (10,1) (10,3) (10,6) (1,1) (1,3) (1,6) (0.1,1) (0.1,3) (0.1,6). IDs in
+    `results/checks/gen_grid_ids.txt`.
+  - **Submit limit: 34 jobs per user** (`QOSMaxSubmitJobPerUserLimit`). The last grid run (reanom L2 0.1 coarsen 6) and the summary
+    did not fit; a background watcher in the session submits them when slots free up (after the two dev tests). **If it did not**
+    (no `gen_reanom_contig_l2_0.1_c6_*` dir / no `gen_summary.*.out`), from the worktree:
+    `sbatch -t 10:00:00 scripts_TomsQoI/results/checks/gen_pipeline.slurm reanom_contig_l2_0.1_c6 -- --dataset forcing --fields oceTAUE oceTAUN --field-scale std --forcing-anomalies reanomalize --val-split contiguous --l2-first 0.1 --coarsen 6`
+    then `sbatch --dependency=afterany:<all grid ids> scripts_TomsQoI/results/checks/gen_summary.slurm`. Cancelling the other
+    session's superseded jobs (3591830/33/36 compares, 3591844 summary) was refused by the permission system; they are left queued.
+    Note 3591844 judges "learned" on all-sample accuracy (misleading, see above).
+  - **Summary**: `results/checks/gen_summary.py` / `.slurm` (worktree): per run and lag train/val/test accuracy and the majority
+    baseline; per dataset the configuration with the **best mean validation accuracy** (chosen on validation, never on test), its
+    test accuracy and its LRP figures; and the current-way runs' test accuracies and figure folders. **The two sets of LRP plots the
+    owner asked for**: current way = `results/torch_full_sst/LRP_torch/*.png` (main checkout; SST),
+    `<worktree>/scripts_TomsQoI/results/forcing_wind_asis_std_3591820/LRP_torch/*.png` and `forcing_wind_reanom_std_3591821/LRP_torch/*.png`
+    (forcing, L2 10, std, shuffled); contiguous = the best run per dataset in `gen_summary.<id>.out`.
+  - If the tests fail, the grid stays `DependencyNeverSatisfied`: read `results/checks/gen_pipeline.360130{7,8}.out` and the step logs,
+    fix, `scancel` the grid, resubmit (loop in this session's transcript).
 - A collaborator-facing summary of all conclusions was published (private until the owner shares it):
   https://claude.ai/artifact/RngeEWQRRXVYxDvQsDX5gT (source in that session's scratchpad; republish from a new session by passing the URL).
 
