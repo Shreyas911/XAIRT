@@ -753,7 +753,7 @@ the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
     below). Order within each dataset: (10,1) (10,3) (10,6) (1,1) (1,3) (1,6) (0.1,1) (0.1,3) (0.1,6). IDs in
     `results/checks/gen_grid_ids.txt`.
   - **Submit limit: 34 jobs per user** (`QOSMaxSubmitJobPerUserLimit`). The last grid run (reanom L2 0.1 coarsen 6) and the summary
-    did not fit; a background watcher in the session submits them when slots free up (after the two dev tests). **If it did not**
+    did not fit; a **detached** watcher, `<worktree>/scripts_TomsQoI/results/checks/submit_rest.sh` (started with `setsid nohup`, PID 3911624 on the login node, log `submit_rest.log` next to it), submits them when slots free up (after the two dev tests), and survives the session closing. **If it did not** (or the login node was rebooted)
     (no `gen_reanom_contig_l2_0.1_c6_*` dir / no `gen_summary.*.out`), from the worktree:
     `sbatch -t 10:00:00 scripts_TomsQoI/results/checks/gen_pipeline.slurm reanom_contig_l2_0.1_c6 -- --dataset forcing --fields oceTAUE oceTAUN --field-scale std --forcing-anomalies reanomalize --val-split contiguous --l2-first 0.1 --coarsen 6`
     then `sbatch --dependency=afterany:<all grid ids> scripts_TomsQoI/results/checks/gen_summary.slurm`. Cancelling the other
