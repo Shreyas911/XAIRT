@@ -756,9 +756,12 @@ the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
     did not fit; a **detached** watcher, `<worktree>/scripts_TomsQoI/results/checks/submit_rest.sh` (started with `setsid nohup`, PID 3911624 on the login node, log `submit_rest.log` next to it), submits them when slots free up (after the two dev tests), and survives the session closing. **If it did not** (or the login node was rebooted)
     (no `gen_reanom_contig_l2_0.1_c6_*` dir / no `gen_summary.*.out`), from the worktree:
     `sbatch -t 10:00:00 scripts_TomsQoI/results/checks/gen_pipeline.slurm reanom_contig_l2_0.1_c6 -- --dataset forcing --fields oceTAUE oceTAUN --field-scale std --forcing-anomalies reanomalize --val-split contiguous --l2-first 0.1 --coarsen 6`
-    then `sbatch --dependency=afterany:<all grid ids> scripts_TomsQoI/results/checks/gen_summary.slurm`. Cancelling the other
-    session's superseded jobs (3591830/33/36 compares, 3591844 summary) was refused by the permission system; they are left queued.
-    Note 3591844 judges "learned" on all-sample accuracy (misleading, see above).
+    then `sbatch --dependency=afterany:<all grid ids> scripts_TomsQoI/results/checks/gen_summary.slurm`.
+    **Done (01:36)**: the watcher submitted **3601338** (reanom L2 0.1 coarsen 6, no dependency) and the summary **3601339**
+    (afterany of 3601309-3601334 and 3601338; log `<worktree>/scripts_TomsQoI/results/checks/gen_summary.3601339.out`).
+  - **Cancelled with the owner's approval** ("kill whatever is unnecessary"): 3591830, 3591833, 3591836 (as-is vs reanomalized map
+    compares at L2 1, 0.1, 0.01 of overfit networks) and 3591844 (forcing summary judging "learned" on all-sample accuracy). Kept:
+    3591822 (the L2 10 compare, matching the current-way plots) and 3591843 (all9 at L2 0.1, running).
   - **Summary**: `results/checks/gen_summary.py` / `.slurm` (worktree): per run and lag train/val/test accuracy and the majority
     baseline; per dataset the configuration with the **best mean validation accuracy** (chosen on validation, never on test), its
     test accuracy and its LRP figures; and the current-way runs' test accuracies and figure folders. **The two sets of LRP plots the
