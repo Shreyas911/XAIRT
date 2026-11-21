@@ -150,7 +150,7 @@ if __name__ == "__main__":
 
                 result[cls][key], map_keras, map_torch = agreement(a_keras, a_torch)
                 for lib, m in (('keras', map_keras), ('torch', map_torch)):
-                    for tag, field in common.field_maps(m, wetpoints, ctx.fields):
+                    for tag, field in common.field_maps(m, wetpoints, ctx.fields, ctx.coarse):
                         maps[f"lrp_{common.lag_name(lag)}_{tag}{key}_{cls}_{lib}"] = field
 
                 print(f"  {cls}, {method['title']}: " + ", ".join(f"{k} = {v:.4f}" if isinstance(v, float) else f"{k} = {v}"

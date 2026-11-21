@@ -150,7 +150,7 @@ if __name__ == "__main__":
                         keras.utils.set_random_seed(seed)
                     else:
                         torch.manual_seed(seed)
-                    x_t, x_v, y_t, y_v = common.split_lag(ctx.X[:ctx.idx], ctx.oneHotCost[:ctx.idx], lag, common.VAL_SPLIT_FRAC)
+                    x_t, x_v, y_t, y_v = common.split_for(ctx, lag)
                     model, _ = train(x_t, y_t, x_v, y_v, lag, ctx.layers, ctx.class_weight, models_dir)
                     key = f"{backend} seed {seed} epochs {epochs} lag {lag}"
                     results[key] = inspect(weights_of(model), ctx, lag)

@@ -91,6 +91,16 @@ def parse_args(backend, extra_args = None):
     p.add_argument("--l2-first", type=float, default=10.0,
                    help="L2 penalty of the first hidden layer's weights and biases; 10 (default) is the published SST experiment. "
                         "The forcing fields did not learn with 10 (2026-11-18), see HANDOFF")
+    p.add_argument("--val-split", choices=["shuffled", "contiguous"], default="shuffled",
+                   help="validation set of each lag: 'shuffled' (default, the published experiment) is a random 20%% of the training "
+                        "period, whose days have near-copies in training (autocorrelation), so the best-val checkpoint keeps "
+                        "overfitting; 'contiguous' is the last 20%% of the training period, with --val-gap days dropped before and "
+                        "after it (train | gap | val | gap | test)")
+    p.add_argument("--val-gap", type=int, default=60,
+                   help="days dropped on each side of a contiguous validation block (the QoI is a 61-day running mean)")
+    p.add_argument("--coarsen", type=int, default=1,
+                   help="average the inputs over k x k blocks of grid cells of each LLC tile (k^2 fewer inputs, against "
+                        "overfitting); maps are drawn back on the full grid, each block at its value. 1 (default): no coarsening")
     p.add_argument("--forcing-dir", default=FORCING_DIR,
                    help="directory with INPUT_FORCINGS/ and TARGET_QoIs/ of the 'forcing' dataset")
     p.add_argument("--forcing-anomalies", choices=["as-is", "reanomalize"], default="as-is",
@@ -266,11 +276,35 @@ def load_forcing(forcing_dir, grid_dir, fields, forcing_anomalies):
         y_full = anomalize_new(y_full, num_years = FORCING_N_YEARS)
     return parts, y_full, wetpoints
 
-def field_maps(values, wetpoints, fields):
+def coarse_index(wetpoints, k):
+    """
+    For --coarsen k: the coarse cell (0..m-1) of every wet point, the k x k block of its tile that it lies in, and m. Only wet
+    points count, so a coast block is the mean of its wet cells.
+    """
+    tile, j, i = (np.asarray(w) for w in wetpoints)
+    key = (tile*1000 + j//k)*1000 + i//k
+    _, index = np.unique(key, return_inverse = True)
+    return index, int(index.max()) + 1
+
+def coarsen_fields(X, index, m, n_fields):
+    """(samples, n_fields*n_wet) -> (samples, n_fields*m): each field averaged over the coarse cells of coarse_index()."""
+    import scipy.sparse
+    n = len(index)
+    A = scipy.sparse.csr_matrix((1.0/np.bincount(index)[index], (np.arange(n), index)), shape = (n, m))
+    return np.concatenate([np.asarray(X[:, f*n:(f+1)*n] @ A, dtype = X.dtype) for f in range(n_fields)], axis = 1)
+
+def field_maps(values, wetpoints, fields, coarse = None):
     """
     (len(fields)*n_wet,) -> [(tag, (13, 90, 90) map)], one per field, tag '' for a single field (the names of the single-SST
     experiment) and '<FIELD>_' otherwise, to put into a variable name, e.g. f"lrp_{lag}_{tag}{method}_{cls}".
+    With coarse = (index, m) of coarse_index() the values are (len(fields)*m,), one per coarse cell, and every wet point gets the
+    value of its cell.
     """
+    if coarse is not None:
+        index, m = coarse
+        if len(values) != m*len(fields):
+            raise ValueError(f"{len(values)} values for {len(fields)} fields of {m} coarse cells")
+        values = np.concatenate([values[f*m:(f+1)*m][index] for f in range(len(fields))])
     n = len(wetpoints[0])
     if len(values) != n*len(fields):
         raise ValueError(f"{len(values)} values for {len(fields)} fields of {n} wet points")
@@ -373,18 +407,30 @@ def make_context(args):
     os.makedirs(models_dir, exist_ok = True)
 
     X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir, args.fields, args.field_scale, **data_kwargs(args))
+    coarse = None
+    if args.coarsen > 1:
+        coarse = coarse_index(wetpoints, args.coarsen)
+        n_before = X.shape[1]
+        X = coarsen_fields(X, *coarse, len(args.fields))
+        print(f"coarsened {args.coarsen}x{args.coarsen}: {n_before} -> {X.shape[1]} inputs")
     idx = int(X.shape[0]*(1-TEST_SPLIT_FRAC))
     # The SST test set is the notebook's last N_TEST samples; another dataset keeps the same test fraction
     n_test = N_TEST if args.dataset == 'sst' else X.shape[0] - idx
     return types.SimpleNamespace(X = X, oneHotCost = oneHotCost, wetpoints = wetpoints, XC = XC, YC = YC, fields = list(args.fields),
+                                 coarse = coarse,
                                  layers = make_layers(X.shape[1], args.l2_first),
                                  class_weight = class_weights(oneHotCost, n_test),
                                  idx = idx,
+                                 val_split = args.val_split, val_gap = args.val_gap,
                                  models_dir = models_dir)
+
+def split_for(ctx, lag):
+    """x_t, x_v, y_t, y_v of a lag, from the training period, as --val-split / --val-gap say."""
+    return split_lag(ctx.X[:ctx.idx], ctx.oneHotCost[:ctx.idx], lag, VAL_SPLIT_FRAC, mode = ctx.val_split, gap = ctx.val_gap)
 
 def train_on_lag(ctx, lag, train_fn):
     """Trains a network of a lag as the LRP scripts do, train_fn is the make_train_fn(args) of the backend."""
-    x_t, x_v, y_t, y_v = split_lag(ctx.X[:ctx.idx], ctx.oneHotCost[:ctx.idx], lag, VAL_SPLIT_FRAC)
+    x_t, x_v, y_t, y_v = split_for(ctx, lag)
     model, _ = train_fn(x_t, y_t, x_v, y_v, lag, ctx.layers, ctx.class_weight, ctx.models_dir)
     return model
 
@@ -403,10 +449,23 @@ def lag_align(X, oneHotCost, lagSteps):
     else:
         return X[-lagSteps:], oneHotCost[:lagSteps]
 
-def split_lag(X_train, oneHotCost_train, lagSteps, val_split_frac, seed = 42):
-    """Returns x_t, x_v, oneHotCost_t, oneHotCost_v"""
+def split_lag(X_train, oneHotCost_train, lagSteps, val_split_frac, seed = 42, mode = 'shuffled', gap = 60):
+    """
+    Returns x_t, x_v, oneHotCost_t, oneHotCost_v. mode 'shuffled' (the published experiment): a random val_split_frac of the
+    samples. 'contiguous': the last val_split_frac of the period, with gap samples dropped before it (between train and val) and
+    after it (between val and the test period that follows), so no validation day has a neighbour in training or test.
+    """
     x, y = lag_align(X_train, oneHotCost_train, lagSteps)
-    return train_test_split(x, y, test_size=val_split_frac, shuffle=True, random_state=seed)
+    if mode == 'shuffled':
+        return train_test_split(x, y, test_size=val_split_frac, shuffle=True, random_state=seed)
+    n = len(x)
+    n_val = int(round(val_split_frac*n))
+    end_val = n - gap
+    start_val = end_val - n_val
+    end_train = start_val - gap
+    if end_train <= 0:
+        raise ValueError(f"no training samples left: {n} samples, {n_val} validation, gap {gap}")
+    return x[:end_train], x[start_val:end_val], y[:end_train], y[start_val:end_val]
 
 def correct_indices(probs, y_true, lagSteps):
     """Indices into X of the samples whose class (pos = 0, neg = 1) is predicted correctly."""
@@ -474,7 +533,7 @@ def run_experiment(backend, args, train_fn, predict_fn, explain_fn, methods):
 
         print(f'Lag: {lag} days, for Theta')
 
-        x_t, x_v, y_t, y_v = split_lag(X[:idx], oneHotCost[:idx], lag, VAL_SPLIT_FRAC)
+        x_t, x_v, y_t, y_v = split_for(ctx, lag)
         model, model_for_xai = train_fn(x_t, y_t, x_v, y_v, lag, layers, class_weight, models_dir)
 
         X_al, y_al = lag_align(X, oneHotCost, lag)
@@ -483,21 +542,32 @@ def run_experiment(backend, args, train_fn, predict_fn, explain_fn, methods):
 
         idx_pos, idx_neg = correct_indices(predict_fn(model, X), oneHotCost, lag)
 
+        # Accuracy and F1 of the whole series (as published), and of the training samples, the validation samples and the test
+        # period (the samples after idx, lag-aligned within it) separately: only val and test say whether the network generalizes
+        def scores(x, y):
+            pred, true = np.argmax(predict_fn(model, x), axis=1), np.argmax(y, axis=1)
+            return float(accuracy_score(true, pred)), float(f1_score(true, pred, average='binary', zero_division=0))
+        x_test, y_test = lag_align(X[idx:], oneHotCost[idx:], lag)
         result = {'Accuracy': float(accuracy_score(QoI_true, QoI_predict)),
                   'F1_Score': float(f1_score(QoI_true, QoI_predict, average='binary')),
                   'n_pos': len(idx_pos), 'n_neg': len(idx_neg)}
+        for part, (x, y) in (('Train', (x_t, y_t)), ('Val', (x_v, y_v)), ('Test', (x_test, y_test))):
+            result[f'{part}_Accuracy'], result[f'{part}_F1'] = scores(x, y)
+        result['Test_Majority'] = float(max(y_test.mean(axis = 0)))
+        print(f"lag {lag}: accuracy train {result['Train_Accuracy']:.3f}, val {result['Val_Accuracy']:.3f}, "
+              f"test {result['Test_Accuracy']:.3f} (majority class {result['Test_Majority']:.3f})", flush = True)
         maps = {}
 
         nan_values = np.full(X.shape[1], np.nan)
         for cls, idx_c in (('pos', idx_pos), ('neg', idx_neg)):
             comp = np.nanmean(X[idx_c], axis = 0) if len(idx_c) > 0 else nan_values
-            for tag, field in field_maps(comp, wetpoints, args.fields):
+            for tag, field in field_maps(comp, wetpoints, args.fields, ctx.coarse):
                 maps[f'{tag}comp_{cls}'] = field
 
             for method in methods:
                 print(f"Analyze using {method['title']} for {cls} samples")
                 mean = normalized_mean_relevance(explain_fn(model_for_xai, method, X[idx_c])) if len(idx_c) > 0 else nan_values
-                for tag, field in field_maps(mean, wetpoints, args.fields):
+                for tag, field in field_maps(mean, wetpoints, args.fields, ctx.coarse):
                     maps[f"{tag}{title_key(method['title'])}_{cls}"] = field
 
         results[lag] = (result, maps)

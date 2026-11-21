@@ -62,7 +62,7 @@ def run_oi(backend, args, get_model, predict_fn, optimal_input_fn):
                 print(f"Optimal input for {kind} samples, starting from the mean of {len(idx_c)} correct samples")
                 init = np.nanmean(ctx.X[idx_c], axis = 0)[np.newaxis,:]
                 oi = optimal_input_fn(model, DESIRED[kind], init, args.eta, args.oi_iters, args.print_freq)
-            for tag, field in common.field_maps(oi, ctx.wetpoints, ctx.fields):
+            for tag, field in common.field_maps(oi, ctx.wetpoints, ctx.fields, ctx.coarse):
                 fields[kind][tag][lag] = field
 
     for kind in kinds:
