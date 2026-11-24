@@ -10,6 +10,7 @@ The data, the experiment and the analysis are in eccov4r5_common.py and are shar
 Keras script, so the two backends run the identical experiment.
 """
 
+import copy
 import sys
 from os.path import join
 from pathlib import Path
@@ -38,7 +39,7 @@ def make_train_fn(args):
 
         T = TrainTorchFullyConnectedNN(x_t, y_t,
                                        layers = layers,
-                                       losses = common.LOSSES,
+                                       losses = common.losses(getattr(args, "task", "classify")),
                                        optimizer = 'sgd',    # nesterov, momentum 0.9
                                        learning_rate = 0.01,
                                        metrics = [],         # ignored, accuracy and F1 are computed afterwards
@@ -84,6 +85,17 @@ def explain(model_wo_softmax, method, samples):
     a, _ = Xplain.quick_analyze()
     return a
 
+def negate(model):
+    """A copy of a network with its output negated (the last Linear layer's weights and bias times -1), for --task regress:
+    the samples predicted negative are explained through minus the output."""
+    neg = copy.deepcopy(model)
+    last = [m for m in neg.modules() if isinstance(m, torch.nn.Linear)][-1]
+    with torch.no_grad():
+        last.weight.mul_(-1)
+        if last.bias is not None:
+            last.bias.mul_(-1)
+    return neg
+
 if __name__ == "__main__":
 
     args = common.parse_args("torch")
@@ -93,4 +105,4 @@ if __name__ == "__main__":
 
     print("Running on GPU" if torch.cuda.is_available() else "Running on CPU")
 
-    common.run_experiment("torch", args, make_train_fn(args), predict, explain, METHODS)
+    common.run_experiment("torch", args, make_train_fn(args), predict, explain, METHODS, negate_fn = negate)

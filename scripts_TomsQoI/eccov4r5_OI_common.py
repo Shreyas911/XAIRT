@@ -39,6 +39,8 @@ def run_oi(backend, args, get_model, predict_fn, optimal_input_fn):
       optimal_input_fn(model, desired_labels, init, eta, n_iters, print_freq) -> optimal input (wetpoints,)
     """
 
+    if getattr(args, "task", "classify") == "regress":
+        raise NotImplementedError("--task regress: OI and analyze are only for the classifiers (the LRP scripts do regression)")
     ctx = common.make_context(args)
 
     kinds = ['pos', 'neg'] if args.kind == 'both' else [args.kind]

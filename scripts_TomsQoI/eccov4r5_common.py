@@ -38,8 +38,26 @@ BATCH_SIZE = 128
 LOSSES = [{'kind': 'categorical_crossentropy', 'weight': 1.0}]
 NORMALIZE = {'bool_': True, 'kind': 'MaxAbs'}
 
-def make_layers(n_features, l2_first = 10.0):
-    """l2_first: the L2 penalty of the first hidden layer, 10 in the published SST experiment (--l2-first)."""
+REG_LOSSES = [{'kind': 'mse', 'weight': 1.0}]
+
+def losses(task):
+    return REG_LOSSES if task == 'regress' else LOSSES
+
+def class_probs(out):
+    """Network outputs -> (samples, 2) class scores for correct_indices and accuracy: the softmax of a classifier as it is, a
+    regression output (samples, 1) as [output >= 0, output < 0]."""
+    out = np.asarray(out)
+    if out.shape[1] == 1:
+        return np.column_stack([out[:, 0] >= 0, out[:, 0] < 0]).astype(np.float32)
+    return out
+
+def make_layers(n_features, l2_first = 10.0, task = 'classify'):
+    """l2_first: the L2 penalty of the first hidden layer, 10 in the published SST experiment (--l2-first). task 'regress': one
+    linear output instead of the 2 softmax ones."""
+    if task == 'regress':
+        layers = make_layers(n_features, l2_first)
+        layers[-1] = dict(layers[-1], size = 1, activation = None)
+        return layers
     return [{'size': n_features, 'activation': None     , 'use_bias': None},
             {'size': 8         , 'activation': 'relu'   , 'use_bias': True,
              'l1_w_reg': 0.0, 'l1_b_reg': 0.0, 'l2_w_reg': l2_first, 'l2_b_reg': l2_first},
@@ -106,6 +124,11 @@ def parse_args(backend, extra_args = None):
     p.add_argument("--forcing-anomalies", choices=["as-is", "reanomalize"], default="as-is",
                    help="'forcing' dataset: use the anomalies of the files as they are (default), or also remove the mean "
                         "and linear trend of each calendar day with anomalize_new, as for SST")
+    p.add_argument("--task", choices=["classify", "regress"], default="classify",
+                   help="'classify' (default): the sign of the QoI, 2 softmax outputs. 'regress' (PyTorch only): the QoI itself "
+                        "(its 61-day running mean, divided by its std over the training period), 1 linear output, MSE; metrics "
+                        "R^2, correlation and the accuracy of its sign; LRP of the output for samples predicted positive and of "
+                        "minus the output for those predicted negative; no OI or analyze (they refuse it)")
     p.add_argument("--qoi-highpass", type=int, default=0,
                    help="remove the centered N-day running mean from the daily QoI before its 61-day running mean and sign "
                         "make the classes, so that the classes follow the QoI's variability faster than N days and not its "
@@ -438,7 +461,7 @@ def make_context(args):
     models_dir = join(args.out_dir, 'models')
     os.makedirs(models_dir, exist_ok = True)
 
-    X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir, args.fields, args.field_scale, **data_kwargs(args))
+    X, y, oneHotCost, wetpoints, XC, YC = load_data_with_y(args.r4_dir, args.r5_dir, args.fields, args.field_scale, **data_kwargs(args))
     if REGIONS[args.region] is not None:
         lat0, lat1, lon0, lon1 = REGIONS[args.region]
         lat = np.asarray(YC.values)[wetpoints]
@@ -457,17 +480,22 @@ def make_context(args):
     idx = int(X.shape[0]*(1-TEST_SPLIT_FRAC))
     # The SST test set is the notebook's last N_TEST samples; another dataset keeps the same test fraction
     n_test = N_TEST if args.dataset == 'sst' else X.shape[0] - idx
-    return types.SimpleNamespace(X = X, oneHotCost = oneHotCost, wetpoints = wetpoints, XC = XC, YC = YC, fields = list(args.fields),
+    # The training targets: the one-hot classes, or for --task regress the QoI divided by its std over the training period (the
+    # classes stay in oneHotCost: they choose the samples of the composites and LRP and give the sign accuracy)
+    task = getattr(args, 'task', 'classify')
+    targets = oneHotCost if task == 'classify' else (y / np.std(y[:idx])).astype(np.float32)[:, np.newaxis]
+    return types.SimpleNamespace(X = X, oneHotCost = oneHotCost, targets = targets, task = task,
+                                 wetpoints = wetpoints, XC = XC, YC = YC, fields = list(args.fields),
                                  coarse = coarse,
-                                 layers = make_layers(X.shape[1], args.l2_first),
-                                 class_weight = class_weights(oneHotCost, n_test),
+                                 layers = make_layers(X.shape[1], args.l2_first, task),
+                                 class_weight = class_weights(oneHotCost, n_test) if task == 'classify' else None,
                                  idx = idx,
                                  val_split = args.val_split, val_gap = args.val_gap,
                                  models_dir = models_dir)
 
 def split_for(ctx, lag):
-    """x_t, x_v, y_t, y_v of a lag, from the training period, as --val-split / --val-gap say."""
-    return split_lag(ctx.X[:ctx.idx], ctx.oneHotCost[:ctx.idx], lag, VAL_SPLIT_FRAC, mode = ctx.val_split, gap = ctx.val_gap)
+    """x_t, x_v, y_t, y_v (the training targets) of a lag, from the training period, as --val-split / --val-gap say."""
+    return split_lag(ctx.X[:ctx.idx], ctx.targets[:ctx.idx], lag, VAL_SPLIT_FRAC, mode = ctx.val_split, gap = ctx.val_gap)
 
 def train_on_lag(ctx, lag, train_fn):
     """Trains a network of a lag as the LRP scripts do, train_fn is the make_train_fn(args) of the backend."""
@@ -556,18 +584,27 @@ def title_key(title):
 def lag_name(lag):
     return f"minus{-lag}" if lag < 0 else str(lag)
 
-def run_experiment(backend, args, train_fn, predict_fn, explain_fn, methods):
+def run_experiment(backend, args, train_fn, predict_fn, explain_fn, methods, negate_fn = None):
     """
     The whole experiment, with the backend specific parts given as functions:
 
       train_fn(x_t, y_t, x_v, y_v, lag, layers, class_weight, models_dir) -> (model, model_for_xai)
-      predict_fn(model, X) -> class probabilities (samples, 2)
+      predict_fn(model, X) -> class probabilities (samples, 2), or for --task regress the output (samples, 1)
       explain_fn(model_for_xai, method, samples) -> relevance (samples, wetpoints)
+      negate_fn(model_for_xai) -> the same network with its output negated (--task regress: the samples predicted negative are
+                                  explained through minus the output, so that both classes are explained by a positive output)
     """
 
     ctx = make_context(args)
     X, oneHotCost, wetpoints, XC, YC = ctx.X, ctx.oneHotCost, ctx.wetpoints, ctx.XC, ctx.YC
     layers, class_weight, idx, models_dir = ctx.layers, ctx.class_weight, ctx.idx, ctx.models_dir
+    regress = ctx.task == 'regress'
+    if regress and negate_fn is None:
+        raise NotImplementedError(f"--task regress is not implemented for the {backend} backend")
+
+    def true_class(y):
+        """Class index (0 pos, 1 neg) of one-hot targets, or of the sign of regression targets."""
+        return (y[:, 0] < 0).astype(int) if regress else np.argmax(y, axis = 1)
 
     results = {}
     for lag in args.lags:
@@ -578,25 +615,34 @@ def run_experiment(backend, args, train_fn, predict_fn, explain_fn, methods):
         model, model_for_xai = train_fn(x_t, y_t, x_v, y_v, lag, layers, class_weight, models_dir)
 
         X_al, y_al = lag_align(X, oneHotCost, lag)
-        QoI_predict = np.argmax(predict_fn(model, X_al), axis=1)
+        QoI_predict = np.argmax(class_probs(predict_fn(model, X_al)), axis=1)
         QoI_true = np.argmax(y_al, axis=1)
 
-        idx_pos, idx_neg = correct_indices(predict_fn(model, X), oneHotCost, lag)
+        idx_pos, idx_neg = correct_indices(class_probs(predict_fn(model, X)), oneHotCost, lag)
 
-        # Accuracy and F1 of the whole series (as published), and of the training samples, the validation samples and the test
-        # period (the samples after idx, lag-aligned within it) separately: only val and test say whether the network generalizes
+        # Accuracy and F1 (for regression of the sign) of the whole series (as published), and of the training samples, the
+        # validation samples and the test period (the samples after idx, lag-aligned within it) separately: only val and test say
+        # whether the network generalizes. Regression also: R^2 and the correlation of output and target.
         def scores(x, y):
-            pred, true = np.argmax(predict_fn(model, x), axis=1), np.argmax(y, axis=1)
-            return float(accuracy_score(true, pred)), float(f1_score(true, pred, average='binary', zero_division=0))
-        x_test, y_test = lag_align(X[idx:], oneHotCost[idx:], lag)
+            out = predict_fn(model, x)
+            pred, true = np.argmax(class_probs(out), axis=1), true_class(y)
+            s = {'Accuracy': float(accuracy_score(true, pred)), 'F1': float(f1_score(true, pred, average='binary', zero_division=0))}
+            if regress:
+                s['R2'] = float(1 - np.sum((y[:, 0] - out[:, 0])**2) / np.sum((y[:, 0] - y[:, 0].mean())**2))
+                s['Corr'] = float(np.corrcoef(y[:, 0], out[:, 0])[0, 1])
+            return s
+        x_test, y_test = lag_align(X[idx:], ctx.targets[idx:], lag)
         result = {'Accuracy': float(accuracy_score(QoI_true, QoI_predict)),
-                  'F1_Score': float(f1_score(QoI_true, QoI_predict, average='binary')),
+                  'F1_Score': float(f1_score(QoI_true, QoI_predict, average='binary', zero_division=0)),
                   'n_pos': len(idx_pos), 'n_neg': len(idx_neg)}
         for part, (x, y) in (('Train', (x_t, y_t)), ('Val', (x_v, y_v)), ('Test', (x_test, y_test))):
-            result[f'{part}_Accuracy'], result[f'{part}_F1'] = scores(x, y)
-        result['Test_Majority'] = float(max(y_test.mean(axis = 0)))
+            for k, v in scores(x, y).items():
+                result[f'{part}_{k}'] = v
+        result['Test_Majority'] = float(max(np.bincount(true_class(y_test), minlength = 2) / len(y_test)))
         print(f"lag {lag}: accuracy train {result['Train_Accuracy']:.3f}, val {result['Val_Accuracy']:.3f}, "
-              f"test {result['Test_Accuracy']:.3f} (majority class {result['Test_Majority']:.3f})", flush = True)
+              f"test {result['Test_Accuracy']:.3f} (majority class {result['Test_Majority']:.3f})"
+              + (f"; R2 train {result['Train_R2']:.3f}, val {result['Val_R2']:.3f}, test {result['Test_R2']:.3f}, "
+                 f"test corr {result['Test_Corr']:.3f}" if regress else ""), flush = True)
         maps = {}
 
         nan_values = np.full(X.shape[1], np.nan)
@@ -605,9 +651,10 @@ def run_experiment(backend, args, train_fn, predict_fn, explain_fn, methods):
             for tag, field in field_maps(comp, wetpoints, args.fields, ctx.coarse):
                 maps[f'{tag}comp_{cls}'] = field
 
+            xai_model = negate_fn(model_for_xai) if regress and cls == 'neg' else model_for_xai
             for method in methods:
                 print(f"Analyze using {method['title']} for {cls} samples")
-                mean = normalized_mean_relevance(explain_fn(model_for_xai, method, X[idx_c])) if len(idx_c) > 0 else nan_values
+                mean = normalized_mean_relevance(explain_fn(xai_model, method, X[idx_c])) if len(idx_c) > 0 else nan_values
                 for tag, field in field_maps(mean, wetpoints, args.fields, ctx.coarse):
                     maps[f"{tag}{title_key(method['title'])}_{cls}"] = field
 

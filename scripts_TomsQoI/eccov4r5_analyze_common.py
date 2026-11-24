@@ -60,6 +60,8 @@ def run_analyze(backend, args, get_model, predict_fn):
       predict_fn(model, X) -> class probabilities (samples, 2)
     """
 
+    if getattr(args, "task", "classify") == "regress":
+        raise NotImplementedError("--task regress: OI and analyze are only for the classifiers (the LRP scripts do regression)")
     ctx = common.make_context(args)
 
     ds_qoi = {}
