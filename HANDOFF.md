@@ -821,6 +821,24 @@ the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
     `<worktree>/scripts_TomsQoI/results/checks/forcing4_summary.3609306.out`: per run train/val/test/majority per lag and the LRP and
     OI figure paths. Note: with `--qoi-highpass` the class balance changes, compare test accuracy with that run's own majority share.
     IDs in `results/checks/forcing4_ids.txt`.
+  - **Regression (owner: "throw regression into the mix", "also try regression on the SST side"; "I don't think OI is possible for
+    regression" -> no OI)**, `multi_field` commit `4ff5665`: `--task classify|regress` (default classify, unchanged). Regress (Torch
+    only): target = the QoI's 61-day running mean / its training-period std (`ctx.targets`; `ctx.oneHotCost` keeps the classes), one
+    linear output, MSE (`REG_LOSSES`, `losses(task)`, `make_layers(..., task)`), no class weights. `class_probs()` turns the output
+    into [>= 0, < 0] for `correct_indices` and accuracy. LRP: samples with the sign predicted correctly; negative ones explained
+    through the negated output (`negate()` in `eccov4r5_LRP_A1B0_torch.py`, passed as `run_experiment(..., negate_fn)`), so pos and
+    neg maps both explain a positive output. Metrics per lag add `Train/Val/Test_R2`, `_Corr`; accuracy = sign accuracy (compare with
+    `Test_Majority`). OI and analyze raise `NotImplementedError` for regress; `gen_pipeline.slurm` skips them when the options contain
+    `regress`. Keras `run_experiment` raises for regress (no `negate_fn`).
+    Jobs: test **3609312** (dev, forcing regress natl coarsen 3, lags 0 60, 3 epochs); then, `afterok`, gpu-a100 10 h, all contiguous
+    validation, L2 10: SST `s_reg_c1` 3609313, `s_reg_c3` 3609314; forcing wind std `f_reg_global_c3` 3609315, `f_reg_natl_c3`
+    3609316, `f_reg_natl_mean90` 3609317, `f_reg_reanom_natl` 3609318, `f_reg_long_natl_mean90` 3609319 (long lags). The summary
+    **3609306** was moved (`scontrol update ... Dependency=`) to wait for these too and now also lists `gen_s_*` runs and R^2/corr.
+  - **Not verified by running before commit**: no Python on the login node, so the code (both commits of 2026-11-23) was checked by
+    reading the diff; the dev tests 3609296 (four forcing options) and 3609312 (regression) are the first runs. If either fails, its
+    grid stays `DependencyNeverSatisfied`: read `results/checks/gen_pipeline.<test id>.out` and the step logs in
+    `results/gen_test_*_<id>/`, fix on `multi_field`, `scancel` the dependents, resubmit (the `sub` loops are in this session's
+    transcript; names, options and lags are listed above). Queue at 34 of 34 submitted jobs after these.
   - **3609284** (dev, `<worktree>/.../checks/compare_valsplit.slurm`): Pearson per map and lag, SST shuffled (`torch_full_sst`) vs
     contiguous L2 10 c1 and c3 (LRP and OI), forcing as-is shuffled vs contiguous L2 10 c1, forcing shuffled as-is vs reanom; log
     `<worktree>/scripts_TomsQoI/results/checks/compare_valsplit.3609284.out`.
