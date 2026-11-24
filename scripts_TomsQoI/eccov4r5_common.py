@@ -106,6 +106,16 @@ def parse_args(backend, extra_args = None):
     p.add_argument("--forcing-anomalies", choices=["as-is", "reanomalize"], default="as-is",
                    help="'forcing' dataset: use the anomalies of the files as they are (default), or also remove the mean "
                         "and linear trend of each calendar day with anomalize_new, as for SST")
+    p.add_argument("--qoi-highpass", type=int, default=0,
+                   help="remove the centered N-day running mean from the daily QoI before its 61-day running mean and sign "
+                        "make the classes, so that the classes follow the QoI's variability faster than N days and not its "
+                        "multi-year regimes (e.g. 365). 0 (default): no high-pass")
+    p.add_argument("--input-mean", type=int, default=0,
+                   help="replace each day's inputs by their trailing N-day mean (that day and the N-1 before it; fewer at the "
+                        "start of the record), i.e. time-integrated forcing. 0 (default): daily inputs")
+    p.add_argument("--region", choices=sorted(REGIONS), default="global",
+                   help="keep only the wet points in a lat/lon box (see REGIONS), e.g. 'natl' for the North Atlantic; maps are "
+                        "NaN outside. 'global' (default): all wet points of the dataset")
     if extra_args is not None:
         extra_args(p)
     args = p.parse_args()
@@ -115,7 +125,8 @@ def parse_args(backend, extra_args = None):
 
 def data_kwargs(args):
     """The keyword arguments of load_data / load_anomalies that choose the dataset."""
-    return dict(dataset = args.dataset, forcing_dir = args.forcing_dir, forcing_anomalies = args.forcing_anomalies)
+    return dict(dataset = args.dataset, forcing_dir = args.forcing_dir, forcing_anomalies = args.forcing_anomalies,
+                qoi_highpass = args.qoi_highpass, input_mean = args.input_mean)
 
 def add_model_args(parser, sources):
     """The options of the scripts that need a trained network for each lag (OI and analyze)."""
@@ -384,14 +395,35 @@ def make_qoi(X_full, y_full):
 
     return X, y, oneHotCost
 
-def load_data_with_y(r4_dir, r5_dir, fields = ("SST",), field_scale = "none", **kwargs):
+# Lat/lon boxes of --region: (lat min, lat max, lon min, lon max), longitudes in -180..180
+REGIONS = {'global': None,
+           'natl': (0.0, 80.0, -100.0, 20.0)}    # the North Atlantic (and the Arctic edge), where the AMOC at RAPID is
+
+def running_mean(a, n, centered):
+    """Running mean of n days along axis 0, with fewer days at the ends (no NaN). centered: days d-n//2..d+n//2, else d-n+1..d."""
+    c = np.cumsum(np.concatenate([np.zeros((1,) + a.shape[1:], np.float64), a.astype(np.float64)]), axis = 0)
+    days = np.arange(a.shape[0])
+    lo = np.maximum(days - (n//2 if centered else n - 1), 0)
+    hi = np.minimum(days + (n//2 if centered else 0), a.shape[0] - 1) + 1
+    count = (hi - lo).reshape((-1,) + (1,)*(a.ndim - 1))
+    return ((c[hi] - c[lo]) / count).astype(a.dtype)
+
+def load_data_with_y(r4_dir, r5_dir, fields = ("SST",), field_scale = "none", qoi_highpass = 0, input_mean = 0, **kwargs):
     """
     Returns X (samples, len(fields)*wetpoints) of the anomalies, the QoI y (samples,) before it is made a class, the one-hot QoI
     (samples, 2) as float32, the indices of the wetpoints and XC, YC for plotting, see make_qoi. kwargs choose the dataset, see
-    load_anomalies.
+    load_anomalies. qoi_highpass / input_mean: see --qoi-highpass / --input-mean.
     """
 
     X_full, y_full, wetpoints, XC, YC = load_anomalies(r4_dir, r5_dir, fields, field_scale, **kwargs)
+    if qoi_highpass > 0:
+        y_full = y_full - running_mean(y_full, qoi_highpass, centered = True)
+        print(f"QoI high-passed: {qoi_highpass}-day centered running mean removed")
+    if input_mean > 0:
+        # In column blocks, so that the float64 cumulative sum of a large forcing X fits in memory
+        X_full = np.concatenate([running_mean(X_full[:, k:k+5000], input_mean, centered = False)
+                                 for k in range(0, X_full.shape[1], 5000)], axis = 1)
+        print(f"inputs: trailing {input_mean}-day means")
     X, y, oneHotCost = make_qoi(X_full, y_full)
 
     return X, y, oneHotCost, wetpoints, XC, YC
@@ -407,6 +439,15 @@ def make_context(args):
     os.makedirs(models_dir, exist_ok = True)
 
     X, oneHotCost, wetpoints, XC, YC = load_data(args.r4_dir, args.r5_dir, args.fields, args.field_scale, **data_kwargs(args))
+    if REGIONS[args.region] is not None:
+        lat0, lat1, lon0, lon1 = REGIONS[args.region]
+        lat = np.asarray(YC.values)[wetpoints]
+        lon = np.asarray(XC.values)[wetpoints]
+        keep = (lat >= lat0) & (lat <= lat1) & (lon >= lon0) & (lon <= lon1)
+        n = len(keep)
+        X = X[:, np.concatenate([np.flatnonzero(keep) + f*n for f in range(len(args.fields))])]
+        wetpoints = tuple(np.asarray(w)[keep] for w in wetpoints)
+        print(f"region {args.region}: {int(keep.sum())} of {n} wet points kept per field")
     coarse = None
     if args.coarsen > 1:
         coarse = coarse_index(wetpoints, args.coarsen)
