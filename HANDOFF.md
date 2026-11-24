@@ -759,6 +759,29 @@ the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
     then `sbatch --dependency=afterany:<all grid ids> scripts_TomsQoI/results/checks/gen_summary.slurm`.
     **Done (01:36)**: the watcher submitted **3601338** (reanom L2 0.1 coarsen 6, no dependency) and the summary **3601339**
     (afterany of 3601309-3601334 and 3601338; log `<worktree>/scripts_TomsQoI/results/checks/gen_summary.3601339.out`).
+  - **Interim results (2026-11-23 18:56)**: tests 3601307/08 passed; done: all 9 SST runs, as-is (L2 10 c1/c3/c6, L2 1 c1),
+    reanom L2 0.1 c6 (3601338); 13 forcing runs and the summary 3601339 pending. Means over the 9 lags (from the "lag L: accuracy
+    train/val/test (majority)" lines of each `gen_*/LRP_torch.log`):
+
+    | run | train | val | test | test majority |
+    |---|---|---|---|---|
+    | SST current way (shuffled, `torch_full_sst`) | ~0.99 | - | 0.637 (0.54-0.73) | ~0.555 |
+    | SST L2 10 c1 | 0.898 | **0.799** | 0.656 | 0.555 |
+    | SST L2 10 c3 | 0.871 | 0.794 | **0.676** (0.62-0.72) | 0.555 |
+    | SST L2 10 c6 | 0.812 | 0.766 | 0.681 | 0.555 |
+    | SST L2 1 c1 / c3 / c6 | 0.95 | 0.76-0.78 | 0.641 / 0.628 / 0.648 | 0.555 |
+    | SST L2 0.1 c1 / c3 / c6 | 0.98-0.99 | 0.73-0.76 | 0.624 / 0.633 / 0.628 | 0.555 |
+    | forcing as-is L2 10 c1 / c3 / c6 | 0.61-0.62 | 0.30-0.37 | 0.535 / 0.537 / 0.553 | 0.554 |
+    | forcing as-is L2 1 c1 | 0.685 | 0.492 | 0.518 | 0.554 |
+    | forcing reanom L2 0.1 c6 | 0.859 | 0.560 | 0.544 | **0.729** |
+
+    SST: contiguous validation stops the memorization (train 0.81-0.90 at L2 10) and raises test accuracy by 2-4 points with less
+    spread over lags; the strong first-layer L2 of the published setup is the best; coarsening helps a little. Selection on
+    validation picks L2 10 c1 (test 0.656); c3 is a near tie on validation and better on test. Forcing: at or below the majority
+    baseline on test; validation accuracy below 0.5 for as-is (the contiguous validation block, the last ~5 years of the training
+    period, is probably dominated by one AMOC class: the as-is anomalies are not detrended and the AMOC has multi-year regimes; the
+    val majority share is not recorded, check that); reanomalizing changes the test class balance (majority 0.73) and the network
+    is below it. No evidence so far that wind stress predicts the AMOC class with this network.
   - **Cancelled with the owner's approval** ("kill whatever is unnecessary"): 3591830, 3591833, 3591836 (as-is vs reanomalized map
     compares at L2 1, 0.1, 0.01 of overfit networks) and 3591844 (forcing summary judging "learned" on all-sample accuracy). Kept:
     3591822 (the L2 10 compare, matching the current-way plots) and 3591843 (all9 at L2 0.1, running).
