@@ -802,6 +802,25 @@ the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
     Atlantic dipole (+ tauE over the subpolar gyre / Labrador Sea, - over the subtropical gyre / Gulf Stream, NAO-like) at lags
     -30, 0, 30, fading by 60-90**, plus Southern Ocean bands. Lag 0 is also the only lag where forcing test accuracy was above chance
     (0.62-0.63 shuffled), consistent with the instantaneous Ekman response of the AMOC at 26N to the local wind.
+  - **Four ideas to make forcing work (owner 2026-11-23: "Do all 4, schedule all the runs")**, code on `multi_field` (commit
+    "Forcing: high-passed QoI classes, time-mean inputs, regions"), all forcing wind (oceTAUE oceTAUN), std, contiguous validation, L2 10:
+    1. **High-passed QoI classes** instead of regression (regression would rework the output layer, loss, LRP sample selection and OI
+       of every script; told the owner): `--qoi-highpass N` removes the centered N-day running mean from the daily QoI before the
+       61-day mean and sign (`load_data_with_y`, `running_mean`), so the classes follow AMOC variability faster than N days, not its
+       multi-year regimes.
+    2. **Time-integrated inputs**: `--input-mean N`, trailing N-day mean of each input (fewer days at the start), in column blocks.
+    3. **Longer lags**: `--lags` was already generic; `gen_pipeline.slurm` now takes `LAGS` from the environment
+       (`sbatch --export=ALL,LAGS="..."`). Long set: 0 90 180 365 545 730 1095 1460 1825 days.
+    4. **Fewer inputs**: `--region natl` (`REGIONS`: 0-80N, 100W-20E) keeps the North Atlantic wet points (in `make_context`, before
+       `--coarsen`); maps NaN outside; prints "region natl: m of n wet points kept per field".
+    Jobs: test **3609296** (dev; all four at once: hp 365, mean 90, natl, coarsen 3, lags 0 1095, 3 epochs); then, `afterok`, on
+    gpu-a100 (10 h): 3609297 `f_hp365_asis` (coarsen 3), 3609298 `f_hp365_reanom`, 3609299 `f_mean30`, 3609300 `f_mean90`
+    (coarsen 3), 3609301 `f_longlags` (coarsen 3, long lags), 3609302 `f_natl_c1`, 3609303 `f_natl_c3`, 3609304 `f_combo_hp`
+    (natl + mean 90 + hp 365, coarsen 3), 3609305 `f_combo_long` (natl + mean 90, long lags, coarsen 3); run dirs
+    `<worktree>/scripts_TomsQoI/results/gen_f_<name>_<id>/`. Summary **3609306** (`forcing4_summary.py/.slurm`, afterany):
+    `<worktree>/scripts_TomsQoI/results/checks/forcing4_summary.3609306.out`: per run train/val/test/majority per lag and the LRP and
+    OI figure paths. Note: with `--qoi-highpass` the class balance changes, compare test accuracy with that run's own majority share.
+    IDs in `results/checks/forcing4_ids.txt`.
   - **3609284** (dev, `<worktree>/.../checks/compare_valsplit.slurm`): Pearson per map and lag, SST shuffled (`torch_full_sst`) vs
     contiguous L2 10 c1 and c3 (LRP and OI), forcing as-is shuffled vs contiguous L2 10 c1, forcing shuffled as-is vs reanom; log
     `<worktree>/scripts_TomsQoI/results/checks/compare_valsplit.3609284.out`.
