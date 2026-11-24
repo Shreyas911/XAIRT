@@ -782,6 +782,11 @@ the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
     period, is probably dominated by one AMOC class: the as-is anomalies are not detrended and the AMOC has multi-year regimes; the
     val majority share is not recorded, check that); reanomalizing changes the test class balance (majority 0.73) and the network
     is below it. No evidence so far that wind stress predicts the AMOC class with this network.
+    **Context from the owner (2026-11-23): the LRP paper reported only 60-70% accuracy.** So the SST test accuracies (current way
+    0.637, contiguous L2 10 0.66-0.68) are in line with the published result; the "overfitting" alarm of 2026-11-21 concerned the
+    ~0.93 all-sample accuracy that these notes and job summaries had been quoting, not the paper. Contiguous validation is a modest
+    gain at the top of the paper's range (worst lag ~0.62 instead of 0.54) and gives networks that do not memorize. Forcing (~0.53,
+    at the majority baseline) is below the paper's SST level.
   - **Cancelled with the owner's approval** ("kill whatever is unnecessary"): 3591830, 3591833, 3591836 (as-is vs reanomalized map
     compares at L2 1, 0.1, 0.01 of overfit networks) and 3591844 (forcing summary judging "learned" on all-sample accuracy). Kept:
     3591822 (the L2 10 compare, matching the current-way plots) and 3591843 (all9 at L2 0.1, running).
