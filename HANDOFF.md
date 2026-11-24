@@ -787,6 +787,12 @@ the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
     ~0.93 all-sample accuracy that these notes and job summaries had been quoting, not the paper. Contiguous validation is a modest
     gain at the top of the paper's range (worst lag ~0.62 instead of 0.54) and gives networks that do not memorize. Forcing (~0.53,
     at the majority baseline) is below the paper's SST level.
+    **Owner's framing for the paper (2026-11-23):** the goal is whether LRP relevance matches the MITgcm adjoint sensitivities, not
+    the best classifier, so the overfit (shuffled-validation) networks are acceptable; the caveat (LRP explains the network, and an
+    overfit network's relevance may partly reflect memorized training-set patterns, so a mismatch with the adjoint is hard to
+    interpret) **will be discussed in the paper**. Useful evidence for that discussion: the correlation of the shuffled vs contiguous
+    SST LRP maps (offered: `eccov4r5_compare_maps.py` on `torch_full_sst/LRP_torch` vs the best `gen_sst_contig_*` run, not queued
+    yet), optionally LRP on test-period samples only. Forcing networks at chance should not be compared with the adjoint.
   - **Cancelled with the owner's approval** ("kill whatever is unnecessary"): 3591830, 3591833, 3591836 (as-is vs reanomalized map
     compares at L2 1, 0.1, 0.01 of overfit networks) and 3591844 (forcing summary judging "learned" on all-sample accuracy). Kept:
     3591822 (the L2 10 compare, matching the current-way plots) and 3591843 (all9 at L2 0.1, running).
