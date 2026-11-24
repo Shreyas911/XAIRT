@@ -7,6 +7,12 @@ Read the README for what each script does; read this file for the state of thing
 
 ## 0. Standing instruction for every session (from the owner): be super detailed
 
+**Owner, 2026-11-23: "HANDOFF, git commit, push and chat backup is a must after every step."** After every step (each change, job
+submission or result read), before replying: update this file; commit in every checkout that changed (this one, branch
+`clean_keras_torch`, and the worktree `/work/07665/shrey911/ls6/XAIRT_multi_field`, branch `multi_field`; never `examples_TomsQoI/`);
+push both (HTTPS remote: if the credential cache has expired the push fails with "could not read Username"; then say so and give the
+owner the push commands); back up the chat with the `cp` command below.
+
 The owner asked that **every session write its notes in this file in full detail**, so that the next session never has to rediscover anything.
 Concretely, before a session ends (and whenever something important happens), record here:
 
