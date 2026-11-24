@@ -12,7 +12,8 @@ submission or result read), before replying: update this file; commit in every c
 `clean_keras_torch`, and the worktree `/work/07665/shrey911/ls6/XAIRT_multi_field`, branch `multi_field`; never `examples_TomsQoI/`);
 push both (HTTPS remote: if the credential cache has expired the push fails with "could not read Username"; then say so and give the
 owner the push commands; on 2026-11-23 they were written to `~/git_push_commands.sh` for the owner, with the optional
-`git config --global credential.helper 'cache --timeout=2592000'` (30-day in-memory cache)); back up the chat with the `cp` command below.
+`git config --global credential.helper 'cache --timeout=2592000'` (30-day in-memory cache); the owner ran them the same day, so
+Claude's pushes work until about 2026-12-23 or a reboot of the login node clears the cache); back up the chat with the `cp` command below.
 
 The owner asked that **every session write its notes in this file in full detail**, so that the next session never has to rediscover anything.
 Concretely, before a session ends (and whenever something important happens), record here:
