@@ -793,6 +793,18 @@ the forcing test and `fanom_3582379`, then the Nov 11 jobs as listed above.
     interpret) **will be discussed in the paper**. Useful evidence for that discussion: the correlation of the shuffled vs contiguous
     SST LRP maps (offered: `eccov4r5_compare_maps.py` on `torch_full_sst/LRP_torch` vs the best `gen_sst_contig_*` run, not queued
     yet), optionally LRP on test-period samples only. Forcing networks at chance should not be compared with the adjoint.
+  - **Forcing plots looked at (2026-11-23)**, copies for the owner in `scripts_TomsQoI/results/forcing_plots/` (main checkout,
+    gitignored): `1_shuffled_asis` (3591820), `2_shuffled_reanom` (3591821), `3_contiguous_asis_L2-10` (3601318), each
+    `LRP_<field>_<cls>.png` (LRP-A1B0-B) and `OI_<field>_<cls>.png`, `SOURCE.txt` names the run. Observations: shuffled as-is
+    **lag 0 LRP blank**: 100% of both classes all-zero (5454 pos, 4549 neg; A1B0 blocking, now in a Torch forcing network);
+    shuffled reanom lag -60 pos 100% blocked; elsewhere 0-8%. LRP maps otherwise diffuse, weakly raised in the subpolar North
+    Atlantic at lags -30..90. **OI: shuffled = mostly small-scale noise; contiguous L2 10 = smooth, large-scale, a strong North
+    Atlantic dipole (+ tauE over the subpolar gyre / Labrador Sea, - over the subtropical gyre / Gulf Stream, NAO-like) at lags
+    -30, 0, 30, fading by 60-90**, plus Southern Ocean bands. Lag 0 is also the only lag where forcing test accuracy was above chance
+    (0.62-0.63 shuffled), consistent with the instantaneous Ekman response of the AMOC at 26N to the local wind.
+  - **3609284** (dev, `<worktree>/.../checks/compare_valsplit.slurm`): Pearson per map and lag, SST shuffled (`torch_full_sst`) vs
+    contiguous L2 10 c1 and c3 (LRP and OI), forcing as-is shuffled vs contiguous L2 10 c1, forcing shuffled as-is vs reanom; log
+    `<worktree>/scripts_TomsQoI/results/checks/compare_valsplit.3609284.out`.
   - **Cancelled with the owner's approval** ("kill whatever is unnecessary"): 3591830, 3591833, 3591836 (as-is vs reanomalized map
     compares at L2 1, 0.1, 0.01 of overfit networks) and 3591844 (forcing summary judging "learned" on all-sample accuracy). Kept:
     3591822 (the L2 10 compare, matching the current-way plots) and 3591843 (all9 at L2 0.1, running).
